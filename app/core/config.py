@@ -43,6 +43,28 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     embedding_device: str = "cpu"
 
+    # --- High-impact thresholds (Constitution IV / spec Assumptions) ---
+    # Reservation cancellation/modification at or above this party size requires approval.
+    reservation_high_impact_party_size: int = 6
+    default_reservation_duration_minutes: int = 90
+    # Inventory write-offs (waste/correction) at or above this quantity require approval.
+    # No per-unit cost field exists on InventoryItem in the MVP schema, so this is a
+    # quantity threshold rather than a dollar-value one — documented simplification.
+    inventory_high_impact_quantity_threshold: float = 10.0
+    # Purchase requests at or above this estimated cost require approval.
+    purchase_request_high_impact_cost_threshold: float = 200.0
+    # Staffing: any change to an already-published shift is high-impact (binary, no
+    # threshold needed — see StaffShift.is_published).
+
+    # --- Deterministic business-rule defaults used by calculation tools ---
+    # calculate_staff_requirement: servers scale with covers, plus fixed roles.
+    covers_per_server: int = 15
+    covers_per_cook: int = 20
+    minimum_servers_per_shift: int = 1
+    minimum_cooks_per_shift: int = 1
+    # calculate_required_inventory: lookback window used to estimate daily usage rate.
+    inventory_usage_lookback_days: int = 14
+
 
 @lru_cache
 def get_settings() -> Settings:
