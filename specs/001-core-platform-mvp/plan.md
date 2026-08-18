@@ -148,11 +148,12 @@ src/dineops/
 │   ├── analytics_repo.py                  # read-oriented queries over other domains' tables
 │   ├── memory_repo.py
 │   ├── approval_repo.py
-│   └── activity_log_repo.py
+│   ├── event_repo.py
+│   └── agent_run_repo.py               # covers both AgentRun and AgentMessage persistence
 │
 ├── models/                          # SQLAlchemy ORM models (persistence schema), one module/domain
 │   ├── reservation.py, inventory.py, customer.py, staffing.py
-│   ├── memory.py, approval.py, activity_log.py, event_log.py
+│   ├── memory.py, approval.py, agent_run.py, agent_message.py, event.py
 │
 ├── events/                            # Event type definitions + handler registration
 │   ├── types.py                          # Pydantic event schemas (StockLowEvent, ShiftUnderstaffedEvent, ...)
@@ -320,7 +321,7 @@ triggering request or event ID) used purely for observability — never a DB ses
       async def decide(self, approval_id: ApprovalID, decision: ApprovalDecision) -> ApprovalRequest: ...
       async def get_pending(self) -> list[ApprovalRequest]: ...
   ```
-- `propose()` persists an `ApprovalRequest` (status `pending`) via `approval_repo.py` and
+- `propose()` persists an `Approval` row (status `pending`) via `approval_repo.py` and
   publishes an `ApprovalRequested` event on the EventBus (so the manager can be notified) —
   it does **not** execute the underlying action.
 - `decide()` on approval re-invokes the original tool's effect (via the originating
@@ -350,7 +351,7 @@ triggering request or event ID) used purely for observability — never a DB ses
   Tool layer as manager-requested ones, so they're logged identically (FR-032) and subject
   to the same approval gate if they happen to be high-impact.
 - For MVP scale (single process, single restaurant), the bus is an in-process
-  implementation backed by an `EventLog` table for durability/replay and audit — not an
+  implementation backed by an `Event` table for durability/replay and audit — not an
   external broker (Kafka/RabbitMQ); see [research.md](./research.md) for the alternatives
   considered and why this is deferred.
 
@@ -402,12 +403,12 @@ dependency injection — no module reaches into `os.environ` directly outside th
   correlation ID generated per API request and threaded through
   Agent → Tool → Service → Repository calls via `ToolContext` / a `contextvars`-backed
   request context — so one manager request's full call chain is traceable.
-- Every tool invocation (regardless of outcome) writes one `AgentActivityRecord` via
-  `activity_log_repo.py`: acting agent, tool name, trigger (`manager_request` |
-  `event:<type>`), input summary, outcome, and — if high-impact — the linked
-  `ApprovalRequest` id (FR-033–FR-035). This is a durable, queryable table, not just log
-  lines, because FR-034 requires the manager to review it through the product, not by
-  reading logs.
+- Every tool invocation (regardless of outcome) is recorded via `agent_run_repo.py` as an
+  `AgentRun` (acting agent, trigger, outcome) with its step-by-step `AgentMessage` trace
+  (tool name, input/output, and — if high-impact — the linked `Approval` id) — see
+  [data-model.md](./data-model.md#15-agentrun) (FR-033–FR-035). This is durable, queryable
+  storage, not just log lines, because FR-034 requires the manager to review it through
+  the product, not by reading logs.
 - Structured logs remain the mechanism for developer-facing debugging (stack traces,
   timing); the activity log table is the mechanism for manager-facing observability. They
   share a correlation ID so one can jump from a log line to its activity record.
@@ -465,7 +466,7 @@ Re-checked after Phase 1 design ([data-model.md](./data-model.md),
 | 1 | Agent-First, Tool-Mediated Access | **PASS** — `agents/` and `tools/` contain zero references to `sqlalchemy`, `models/`, or `repositories/` in the designed module boundaries; enforced by `test_layer_boundaries.py`. |
 | 2 | No RAG | **PASS** — `data-model.md` and `contracts/` introduce no vector/embedding/document types. `MemoryService.recall` is confirmed structured-lookup only. |
 | 3 | Custom MemoryService | **PASS** — `memory.py`/`memory_repo.py` are a dedicated schema; only `tools/memory_tools.py` reaches `MemoryService`. |
-| 4 | Human Approval | **PASS** — `contracts/tools.md` shows `high_impact` tools returning `PendingApproval`; `data-model.md` defines `ApprovalRequest` state transitions. |
+| 4 | Human Approval | **PASS** — `contracts/tools.md` shows `high_impact` tools returning `PendingApproval`; `data-model.md` defines `Approval` state transitions. |
 | 5 | Orchestrator + Specialized Agents | **PASS** — `tools/registry.py` binds tool subsets per agent; Orchestrator's own tool set is delegation-only. |
 | 6 | Typed Contracts | **PASS** — all cross-layer payloads in `contracts/` are Pydantic models with named fields, no `dict[str, Any]` payloads at a layer boundary. |
 
