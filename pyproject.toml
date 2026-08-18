@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "pgvector>=0.5.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "sentence-transformers>=6.0.0",
@@ -25,6 +26,8 @@ packages = ["app"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
 [dependency-groups]
