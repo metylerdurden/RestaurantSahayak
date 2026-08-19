@@ -18,6 +18,14 @@ class AgentRunRepository(BaseRepository):
     async def get_by_id(self, run_id: uuid.UUID) -> AgentRun | None:
         return await self.session.get(AgentRun, run_id)
 
+    async def list_by_correlation_id(self, correlation_id: uuid.UUID) -> list[AgentRun]:
+        stmt = (
+            select(AgentRun)
+            .where(AgentRun.correlation_id == correlation_id)
+            .order_by(AgentRun.started_at)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def save(self, run: AgentRun) -> AgentRun:
         await self.session.flush()
         return run

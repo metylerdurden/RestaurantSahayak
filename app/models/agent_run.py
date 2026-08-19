@@ -16,7 +16,7 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
     __table_args__ = (
         CheckConstraint(
-            "trigger_type IN ('manager_request','event')", name="ck_agent_runs_trigger_type_valid"
+            "trigger_type IN ('manager_request','event','scheduled')", name="ck_agent_runs_trigger_type_valid"
         ),
         CheckConstraint(
             "status IN ('running','completed','failed')", name="ck_agent_runs_status_valid"
@@ -25,7 +25,9 @@ class AgentRun(Base):
             "(trigger_type = 'manager_request' AND initiated_by_user_id IS NOT NULL "
             "AND triggering_event_id IS NULL) OR "
             "(trigger_type = 'event' AND triggering_event_id IS NOT NULL "
-            "AND initiated_by_user_id IS NULL)",
+            "AND initiated_by_user_id IS NULL) OR "
+            "(trigger_type = 'scheduled' AND initiated_by_user_id IS NULL "
+            "AND triggering_event_id IS NULL)",
             name="ck_agent_runs_trigger_consistency",
         ),
         Index("ix_agent_runs_restaurant_agent_started", "restaurant_id", "agent_name", "started_at"),

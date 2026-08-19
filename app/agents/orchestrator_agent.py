@@ -150,10 +150,15 @@ class OrchestratorAgent:
         task: str,
         *,
         restaurant_id: uuid.UUID,
-        trigger_type: Literal["manager_request", "event"] = "manager_request",
+        trigger_type: Literal["manager_request", "event", "scheduled"] = "manager_request",
         initiated_by_user_id: uuid.UUID | None = None,
         triggering_event_id: uuid.UUID | None = None,
+        correlation_id: uuid.UUID | None = None,
     ) -> OrchestratorResult:
+        """`correlation_id` lets a caller (a background workflow) thread its own id
+        through the orchestrator's own run and every specialist it delegates to, the
+        same way OrchestratorAgent already does for the specialists it calls — a
+        no-op (a fresh one is generated) when not given, as before."""
         started_at = time.monotonic()
         run = await self.agent_run_service.start_run(
             restaurant_id=restaurant_id,
@@ -162,6 +167,7 @@ class OrchestratorAgent:
             trigger_type=trigger_type,
             initiated_by_user_id=initiated_by_user_id,
             triggering_event_id=triggering_event_id,
+            correlation_id=correlation_id,
         )
         log = _logger.bind(agent_run_id=str(run.id), agent_name=self.name, model=self.llm.model_name)
         log.info("orchestrator.started", task=task)

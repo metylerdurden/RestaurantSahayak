@@ -56,7 +56,7 @@ class ToolCallingAgent:
         task: str,
         *,
         restaurant_id: uuid.UUID,
-        trigger_type: Literal["manager_request", "event"] = "manager_request",
+        trigger_type: Literal["manager_request", "event", "scheduled"] = "manager_request",
         initiated_by_user_id: uuid.UUID | None = None,
         triggering_event_id: uuid.UUID | None = None,
         parent_run_id: uuid.UUID | None = None,

@@ -1,15 +1,26 @@
-"""Event-driven workflows: the layer between EventBus and an agent.
+"""Two kinds of workflow live here, both sitting between the rest of the system and
+an agent:
 
-    Event -> EventBus -> Workflow -> Agent -> Tools -> Services -> Database
+Reactive (Step 16):    Event -> EventBus -> Workflow -> Agent -> Tools -> Services -> DB
+Autonomous (Step 17):  Scheduler -> BackgroundWorkflow -> Agent(s) -> Tools -> Services -> DB
 
-A workflow handler's only job is to turn an EventEnvelope into a natural-language
-instruction and call exactly one agent's `.handle()` — it never touches another
-agent's tools/services directly, and it never bypasses approval gating (the agent's
-own tools still go through ApprovalService exactly as they would for a manager
-request). See app.services.event_bus for the bus itself and app.workflows.registry
-for how handlers get wired to it.
+Either way, a workflow's only job is turning something (an event, a scheduled tick)
+into a natural-language instruction and calling an agent's `.handle()` — it never
+touches another agent's tools/services directly, and it never bypasses approval
+gating (a gated tool call still returns PendingApprovalOutput instead of mutating
+anything, exactly as it would for a manager request).
 """
 
+from app.workflows.background_registry import build_background_workflows, register_background_workflows
+from app.workflows.background_workflow import BackgroundWorkflow
 from app.workflows.registry import register_default_workflows
+from app.workflows.scheduler import AsyncIOScheduler, Scheduler
 
-__all__ = ["register_default_workflows"]
+__all__ = [
+    "register_default_workflows",
+    "BackgroundWorkflow",
+    "build_background_workflows",
+    "register_background_workflows",
+    "Scheduler",
+    "AsyncIOScheduler",
+]

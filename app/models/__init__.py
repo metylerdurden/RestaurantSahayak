@@ -17,6 +17,7 @@ from app.models.approval import Approval
 from app.models.event import Event
 from app.models.agent_run import AgentRun, AgentMessage
 from app.models.memory import Memory
+from app.models.workflow_run import WorkflowRun
 
 __all__ = [
     "Base",
@@ -38,4 +39,5 @@ __all__ = [
     "AgentRun",
     "AgentMessage",
     "Memory",
+    "WorkflowRun",
 ]

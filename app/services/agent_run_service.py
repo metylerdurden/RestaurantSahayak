@@ -29,7 +29,7 @@ class AgentRunService:
         restaurant_id: uuid.UUID,
         agent_name: str,
         model_name: str,
-        trigger_type: Literal["manager_request", "event"],
+        trigger_type: Literal["manager_request", "event", "scheduled"],
         initiated_by_user_id: uuid.UUID | None = None,
         triggering_event_id: uuid.UUID | None = None,
         parent_run_id: uuid.UUID | None = None,

@@ -35,7 +35,7 @@ class ToolContext(BaseModel):
     restaurant_id: uuid.UUID
     correlation_id: str
     acting_agent: str
-    trigger_type: Literal["manager_request", "event"] = "manager_request"
+    trigger_type: Literal["manager_request", "event", "scheduled"] = "manager_request"
     agent_run_id: uuid.UUID | None = None
 
 
