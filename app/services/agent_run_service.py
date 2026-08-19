@@ -33,13 +33,18 @@ class AgentRunService:
         initiated_by_user_id: uuid.UUID | None = None,
         triggering_event_id: uuid.UUID | None = None,
         parent_run_id: uuid.UUID | None = None,
+        correlation_id: uuid.UUID | None = None,
     ) -> AgentRun:
+        """`correlation_id` lets a caller (OrchestratorAgent) thread one id across its
+        own run and every specialist run it delegates to, so the whole multi-agent
+        request is traceable as one unit via ix_agent_runs_correlation_id. Omitted by
+        every other caller, which each still get a fresh one as before."""
         return await self.repo.create(
             restaurant_id=restaurant_id,
             agent_name=agent_name,
             model_name=model_name,
             parent_run_id=parent_run_id,
-            correlation_id=uuid.uuid4(),
+            correlation_id=correlation_id or uuid.uuid4(),
             trigger_type=trigger_type,
             initiated_by_user_id=initiated_by_user_id,
             triggering_event_id=triggering_event_id,

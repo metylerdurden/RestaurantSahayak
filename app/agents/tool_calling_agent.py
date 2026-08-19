@@ -59,10 +59,17 @@ class ToolCallingAgent:
         trigger_type: Literal["manager_request", "event"] = "manager_request",
         initiated_by_user_id: uuid.UUID | None = None,
         triggering_event_id: uuid.UUID | None = None,
+        parent_run_id: uuid.UUID | None = None,
+        correlation_id: uuid.UUID | None = None,
     ) -> AgentResult:
         """Receive a natural-language task, run the tool-calling loop, and return a
         structured result. Always returns (never raises) — failures come back as a
-        `status="error"` result, and the AgentRun row is still recorded as failed."""
+        `status="error"` result, and the AgentRun row is still recorded as failed.
+
+        `parent_run_id`/`correlation_id` are for OrchestratorAgent: when it delegates
+        to a specialist, it passes its own run id and correlation id so the specialist's
+        AgentRun is linked into the same trace (parent_run_id) and the same
+        correlation_id — both no-ops for a specialist invoked directly, as before."""
         started_at = time.monotonic()
         run = await self.agent_run_service.start_run(
             restaurant_id=restaurant_id,
@@ -71,6 +78,8 @@ class ToolCallingAgent:
             trigger_type=trigger_type,
             initiated_by_user_id=initiated_by_user_id,
             triggering_event_id=triggering_event_id,
+            parent_run_id=parent_run_id,
+            correlation_id=correlation_id,
         )
         log = _logger.bind(agent_run_id=str(run.id), agent_name=self.name, model=self.llm.model_name)
         log.info("agent.started", task=task)
