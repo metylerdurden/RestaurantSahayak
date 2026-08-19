@@ -19,7 +19,12 @@ from app.tools.base import Tool, ToolContext
 
 class GetStaffScheduleTool(Tool[GetStaffScheduleInput, GetStaffScheduleOutput]):
     name = "get_staff_schedule"
-    description = "Get the shift schedule (with staff assignments) for a date range."
+    description = (
+        "Get the shift schedule (with staff assignments) for a date range. date_from "
+        "and date_to are whole calendar days — any time-of-day given is ignored and "
+        "the entire day is included, so a bare date like 2026-08-20 for both is "
+        "enough to get everything scheduled that day."
+    )
     input_model = GetStaffScheduleInput
     output_model = GetStaffScheduleOutput
 

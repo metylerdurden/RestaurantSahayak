@@ -13,5 +13,6 @@ package may import sqlalchemy, app.models, or app.repositories. Agents call tool
 
 from app.agents.customer_agent import CustomerAgent
 from app.agents.reservation_agent import ReservationAgent
+from app.agents.staffing_agent import StaffingAgent
 
-__all__ = ["ReservationAgent", "CustomerAgent"]
+__all__ = ["ReservationAgent", "CustomerAgent", "StaffingAgent"]

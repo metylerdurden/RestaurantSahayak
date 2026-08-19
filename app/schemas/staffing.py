@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import UTCDatetime
+
 
 class StaffDTO(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -35,8 +37,8 @@ class StaffShiftDTO(BaseModel):
 
 
 class GetStaffScheduleInput(BaseModel):
-    date_from: datetime
-    date_to: datetime
+    date_from: UTCDatetime
+    date_to: UTCDatetime
 
 
 class GetStaffScheduleOutput(BaseModel):
@@ -47,8 +49,8 @@ class GetStaffScheduleOutput(BaseModel):
 
 
 class GetStaffAvailabilityInput(BaseModel):
-    start_at: datetime
-    end_at: datetime
+    start_at: UTCDatetime
+    end_at: UTCDatetime
     role: str | None = None
 
 
@@ -60,8 +62,8 @@ class GetStaffAvailabilityOutput(BaseModel):
 
 
 class CalculateStaffRequirementInput(BaseModel):
-    start_at: datetime
-    end_at: datetime
+    start_at: UTCDatetime
+    end_at: UTCDatetime
     expected_covers: int | None = Field(default=None, ge=0)
 
 
