@@ -51,6 +51,7 @@ class CheckStockTool(Tool[CheckStockInput, CheckStockOutput]):
             restaurant_id=context.restaurant_id,
             item_id=input.item_id,
             required_quantity=input.required_quantity,
+            context=context,
         )
         return CheckStockOutput(
             item=InventoryItemDTO.model_validate(item), sufficient=sufficient, shortfall=shortfall

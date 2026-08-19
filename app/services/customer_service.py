@@ -9,12 +9,14 @@ import uuid
 
 from app.models import Customer, Reservation
 from app.repositories.customer_repo import CustomerRepository
-from app.tools.base import ToolError
+from app.services.event_bus import EventBus
+from app.tools.base import ToolContext, ToolError
 
 
 class CustomerService:
-    def __init__(self, repo: CustomerRepository) -> None:
+    def __init__(self, repo: CustomerRepository, event_bus: EventBus | None = None) -> None:
         self.repo = repo
+        self.event_bus = event_bus
 
     async def get_customer(
         self, *, restaurant_id: uuid.UUID, customer_id: uuid.UUID | None, query: str | None
@@ -45,6 +47,7 @@ class CustomerService:
         name: str | None,
         phone: str | None,
         email: str | None,
+        context: ToolContext | None = None,
     ) -> Customer:
         customer = await self.repo.get_by_id(customer_id)
         if customer is None or customer.restaurant_id != restaurant_id:
@@ -53,11 +56,25 @@ class CustomerService:
         # Only non-None fields are ever applied — a field can be changed but never
         # cleared through this tool, so the "at least one contact method" invariant
         # can't be violated here by construction.
+        changed: dict[str, str] = {}
         if name is not None:
             customer.name = name
+            changed["name"] = name
         if phone is not None:
             customer.phone = phone
+            changed["phone"] = phone
         if email is not None:
             customer.email = email
+            changed["email"] = email
 
-        return await self.repo.save(customer)
+        customer = await self.repo.save(customer)
+        if self.event_bus is not None and changed:
+            await self.event_bus.publish(
+                event_type="customer.updated",
+                restaurant_id=restaurant_id,
+                entity_id=customer.id,
+                payload={"customer_id": str(customer.id), "changed": changed},
+                correlation_id=context.agent_run_id if context else None,
+                published_by="customer_service",
+            )
+        return customer

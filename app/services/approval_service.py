@@ -32,6 +32,7 @@ from app.core.logging import get_logger
 from app.models import Approval
 from app.models.approval import APPROVAL_DOMAINS, APPROVAL_RISK_LEVELS
 from app.repositories.approval_repo import ApprovalRepository
+from app.services.event_bus import EventBus
 from app.services.memory_service import MemoryService
 from app.tools.base import ToolError, utcnow
 
@@ -47,10 +48,33 @@ class ApprovalService:
         *,
         executors: dict[str, Executor] | None = None,
         memory_service: MemoryService | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.repo = repo
         self.executors = executors or {}
         self.memory_service = memory_service
+        self.event_bus = event_bus
+
+    async def _publish(self, event_type: str, approval: Approval, *, extra: dict[str, Any] | None = None) -> None:
+        if self.event_bus is None:
+            return
+        payload = {
+            "approval_id": str(approval.id),
+            "domain": approval.domain,
+            "action": approval.action,
+            "risk_level": approval.risk_level,
+            "status": approval.status,
+        }
+        if extra:
+            payload.update(extra)
+        await self.event_bus.publish(
+            event_type=event_type,
+            restaurant_id=approval.restaurant_id,
+            entity_id=approval.id,
+            payload=payload,
+            correlation_id=approval.proposed_by_agent_run_id,
+            published_by="approval_service",
+        )
 
     async def create_approval_request(
         self,
@@ -77,7 +101,7 @@ class ApprovalService:
                 "low_risk_does_not_require_approval",
                 "LOW-risk actions execute automatically and must not create an approval request.",
             )
-        return await self.repo.create(
+        approval = await self.repo.create(
             restaurant_id=restaurant_id,
             domain=domain,
             action=action,
@@ -89,6 +113,8 @@ class ApprovalService:
             status="pending",
             expires_at=expires_at,
         )
+        await self._publish("approval.created", approval)
+        return approval
 
     async def get_pending_approvals(self, restaurant_id: uuid.UUID) -> list[Approval]:
         return await self.repo.list_pending(restaurant_id)
@@ -102,6 +128,9 @@ class ApprovalService:
 
         await self._execute(approval)
         await self._remember(approval)
+        if approval.domain == "purchase":
+            await self._publish("purchase.approved", approval)
+        await self._publish("approval.completed", approval, extra={"decision": "approved"})
         return approval
 
     async def reject(
@@ -114,6 +143,9 @@ class ApprovalService:
         approval = await self.repo.save(approval)
 
         await self._remember(approval, note=reason)
+        if approval.domain == "purchase":
+            await self._publish("purchase.rejected", approval)
+        await self._publish("approval.completed", approval, extra={"decision": "rejected"})
         return approval
 
     async def expire(self, restaurant_id: uuid.UUID) -> list[Approval]:

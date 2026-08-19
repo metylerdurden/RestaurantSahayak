@@ -17,21 +17,43 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from typing import Any
 
 from app.core.config import Settings
 from app.models import InventoryItem, PurchaseRequest
 from app.repositories.inventory_repo import InventoryRepository
 from app.services.approval_service import ApprovalService
+from app.services.event_bus import EventBus
 from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
 
 
 class InventoryService:
     def __init__(
-        self, repo: InventoryRepository, approval_service: ApprovalService, settings: Settings
+        self,
+        repo: InventoryRepository,
+        approval_service: ApprovalService,
+        settings: Settings,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.repo = repo
         self.approval_service = approval_service
         self.settings = settings
+        self.event_bus = event_bus
+
+    async def _publish(
+        self, event_type: str, *, restaurant_id: uuid.UUID, entity_id: uuid.UUID, payload: dict[str, Any],
+        correlation_id: uuid.UUID | None,
+    ) -> None:
+        if self.event_bus is None:
+            return
+        await self.event_bus.publish(
+            event_type=event_type,
+            restaurant_id=restaurant_id,
+            entity_id=entity_id,
+            payload=payload,
+            correlation_id=correlation_id,
+            published_by="inventory_service",
+        )
 
     async def _get_item_or_raise(self, restaurant_id: uuid.UUID, item_id: uuid.UUID) -> InventoryItem:
         item = await self.repo.get_item(item_id)
@@ -45,13 +67,33 @@ class InventoryService:
         return await self.repo.list_items(restaurant_id, status=status, name_contains=name_contains)
 
     async def check_stock(
-        self, *, restaurant_id: uuid.UUID, item_id: uuid.UUID, required_quantity: Decimal | None
+        self,
+        *,
+        restaurant_id: uuid.UUID,
+        item_id: uuid.UUID,
+        required_quantity: Decimal | None,
+        context: ToolContext | None = None,
     ) -> tuple[InventoryItem, bool | None, Decimal | None]:
         item = await self._get_item_or_raise(restaurant_id, item_id)
         if required_quantity is None:
             return item, None, None
         sufficient = item.quantity_on_hand >= required_quantity
         shortfall = None if sufficient else (required_quantity - item.quantity_on_hand)
+        if not sufficient:
+            await self._publish(
+                "inventory.low",
+                restaurant_id=restaurant_id,
+                entity_id=item.id,
+                payload={
+                    "item_id": str(item.id),
+                    "item_name": item.name,
+                    "quantity_on_hand": str(item.quantity_on_hand),
+                    "low_stock_threshold": str(item.low_stock_threshold),
+                    "required_quantity": str(required_quantity),
+                    "shortfall": str(shortfall),
+                },
+                correlation_id=context.agent_run_id if context else None,
+            )
         return item, sufficient, shortfall
 
     async def calculate_required_inventory(
@@ -129,9 +171,22 @@ class InventoryService:
             )
             purchase_request.approval_id = approval.id
             await self.repo.save_purchase_request(purchase_request)
+            await self._publish(
+                "purchase.requested",
+                restaurant_id=restaurant_id,
+                entity_id=purchase_request.id,
+                payload={
+                    "purchase_request_id": str(purchase_request.id),
+                    "item_id": str(item_id),
+                    "requested_quantity": str(requested_quantity),
+                    "estimated_cost": str(estimated_cost),
+                    "status": "pending_approval",
+                },
+                correlation_id=context.agent_run_id,
+            )
             return PendingApprovalOutput(approval_id=approval.id, summary=approval.reason)
 
-        return await self.repo.create_purchase_request(
+        purchase_request = await self.repo.create_purchase_request(
             restaurant_id=restaurant_id,
             item_id=item_id,
             requested_quantity=requested_quantity,
@@ -139,6 +194,20 @@ class InventoryService:
             status="approved",
             requested_by_agent_run_id=context.agent_run_id,
         )
+        await self._publish(
+            "purchase.requested",
+            restaurant_id=restaurant_id,
+            entity_id=purchase_request.id,
+            payload={
+                "purchase_request_id": str(purchase_request.id),
+                "item_id": str(item_id),
+                "requested_quantity": str(requested_quantity),
+                "estimated_cost": str(estimated_cost) if estimated_cost is not None else None,
+                "status": "approved",
+            },
+            correlation_id=context.agent_run_id,
+        )
+        return purchase_request
 
     async def execute_approved_action(self, approval) -> PurchaseRequest:
         """Applies an approved purchase request. Invoked automatically by

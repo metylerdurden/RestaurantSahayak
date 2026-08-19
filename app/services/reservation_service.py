@@ -1,18 +1,25 @@
 """Reservation domain business rules. Never touches SQL directly — only calls
 ReservationRepository/CustomerRepository, and ApprovalService for the high-impact
 gate (Constitution IV: cancelling/modifying a large party requires human approval).
+
+Also publishes reservation.created/modified/cancelled to the EventBus (opt-in, like
+ApprovalService's executors/memory_service — omitting event_bus at construction time
+preserves exact prior behavior) so other parts of the system (e.g. the Inventory
+workflow) can react without this service knowing or caring who's listening.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from app.core.config import Settings
 from app.models import Reservation
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.reservation_repo import ACTIVE_RESERVATION_STATUSES, ReservationRepository
 from app.services.approval_service import ApprovalService
+from app.services.event_bus import EventBus
 from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
 
 
@@ -23,11 +30,28 @@ class ReservationService:
         customer_repo: CustomerRepository,
         approval_service: ApprovalService,
         settings: Settings,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.repo = repo
         self.customer_repo = customer_repo
         self.approval_service = approval_service
         self.settings = settings
+        self.event_bus = event_bus
+
+    async def _publish(
+        self, event_type: str, *, restaurant_id: uuid.UUID, entity_id: uuid.UUID, payload: dict[str, Any],
+        correlation_id: uuid.UUID | None,
+    ) -> None:
+        if self.event_bus is None:
+            return
+        await self.event_bus.publish(
+            event_type=event_type,
+            restaurant_id=restaurant_id,
+            entity_id=entity_id,
+            payload=payload,
+            correlation_id=correlation_id,
+            published_by="reservation_service",
+        )
 
     def _duration(self, requested: int | None) -> int:
         return requested or self.settings.default_reservation_duration_minutes
@@ -113,7 +137,7 @@ class ReservationService:
                 )
             chosen_table_id = candidates[0].id
 
-        return await self.repo.create(
+        reservation = await self.repo.create(
             restaurant_id=restaurant_id,
             customer_id=customer_id,
             table_id=chosen_table_id,
@@ -124,6 +148,20 @@ class ReservationService:
             notes=notes,
             created_via=context.trigger_type,
         )
+        await self._publish(
+            "reservation.created",
+            restaurant_id=restaurant_id,
+            entity_id=reservation.id,
+            payload={
+                "reservation_id": str(reservation.id),
+                "customer_id": str(customer_id),
+                "table_id": str(chosen_table_id),
+                "party_size": party_size,
+                "requested_time": requested_time.isoformat(),
+            },
+            correlation_id=context.agent_run_id,
+        )
+        return reservation
 
     async def modify_reservation(
         self,
@@ -181,7 +219,15 @@ class ReservationService:
 
         await self._apply_modification(reservation, changes)
         reservation.status = "modified"
-        return await self.repo.save(reservation)
+        reservation = await self.repo.save(reservation)
+        await self._publish(
+            "reservation.modified",
+            restaurant_id=restaurant_id,
+            entity_id=reservation.id,
+            payload={"reservation_id": str(reservation.id), "changes": changes},
+            correlation_id=context.agent_run_id,
+        )
+        return reservation
 
     async def cancel_reservation(
         self,
@@ -222,7 +268,15 @@ class ReservationService:
         reservation.status = "cancelled"
         if reason:
             reservation.notes = f"{reservation.notes or ''}\nCancellation reason: {reason}".strip()
-        return await self.repo.save(reservation)
+        reservation = await self.repo.save(reservation)
+        await self._publish(
+            "reservation.cancelled",
+            restaurant_id=restaurant_id,
+            entity_id=reservation.id,
+            payload={"reservation_id": str(reservation.id), "reason": reason},
+            correlation_id=context.agent_run_id,
+        )
+        return reservation
 
     async def _apply_modification(self, reservation: Reservation, changes: dict) -> None:
         new_party_size = changes.get("party_size", reservation.party_size)
@@ -274,10 +328,23 @@ class ReservationService:
             reason = approval.parameters.get("reason")
             if reason:
                 reservation.notes = f"{reservation.notes or ''}\nCancellation reason: {reason}".strip()
+            event_type = "reservation.cancelled"
+            payload: dict = {"reservation_id": str(reservation.id), "reason": reason}
         elif action == "modify_reservation":
-            await self._apply_modification(reservation, approval.parameters.get("changes", {}))
+            changes = approval.parameters.get("changes", {})
+            await self._apply_modification(reservation, changes)
             reservation.status = "modified"
+            event_type = "reservation.modified"
+            payload = {"reservation_id": str(reservation.id), "changes": changes}
         else:
             raise ToolError("unsupported_action", f"Cannot execute approved action: {action}")
 
-        return await self.repo.save(reservation)
+        reservation = await self.repo.save(reservation)
+        await self._publish(
+            event_type,
+            restaurant_id=reservation.restaurant_id,
+            entity_id=reservation.id,
+            payload=payload,
+            correlation_id=approval.proposed_by_agent_run_id,
+        )
+        return reservation

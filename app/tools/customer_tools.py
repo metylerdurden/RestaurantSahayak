@@ -70,5 +70,6 @@ class UpdateCustomerTool(Tool[UpdateCustomerInput, UpdateCustomerOutput]):
             name=input.name,
             phone=input.phone,
             email=input.email,
+            context=context,
         )
         return UpdateCustomerOutput(customer=CustomerDTO.model_validate(customer))
