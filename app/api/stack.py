@@ -30,12 +30,15 @@ from app.repositories.inventory_repo import InventoryRepository
 from app.repositories.memory_repo import MemoryRepository
 from app.repositories.reservation_repo import ReservationRepository
 from app.repositories.staffing_repo import StaffingRepository
+from app.repositories.user_repo import UserRepository
 from app.repositories.workflow_run_repo import WorkflowRunRepository
+from app.services.agent_activity_service import AgentActivityService
 from app.services.agent_run_service import AgentRunService
 from app.services.analytics_service import AnalyticsService
 from app.services.approval_execution import build_executors
 from app.services.approval_service import ApprovalService
 from app.services.customer_service import CustomerService
+from app.services.dashboard_service import DashboardService
 from app.services.event_bus import InProcessEventBus
 from app.services.inventory_service import InventoryService
 from app.services.memory_service import MemoryService
@@ -85,6 +88,20 @@ class AgentStack:
     analytics_agent: AnalyticsAgent
     workflow_run_service: WorkflowRunService
     background_workflows: dict[str, BackgroundWorkflow]
+    # Manager API (Step 19) additions — direct service access for plain CRUD/read
+    # routes that don't need to go through an LLM agent at all (e.g. listing
+    # reservations), plus the read-side/aggregation services the dashboard and
+    # Agent Activity views are built from.
+    reservation_service: ReservationService
+    inventory_service: InventoryService
+    customer_service: CustomerService
+    staffing_service: StaffingService
+    approval_service: ApprovalService
+    memory_service: MemoryService
+    agent_run_service: AgentRunService
+    agent_activity_service: AgentActivityService
+    dashboard_service: DashboardService
+    user_repo: UserRepository
 
 
 def build_agent_stack(session: AsyncSession) -> AgentStack:
@@ -92,9 +109,11 @@ def build_agent_stack(session: AsyncSession) -> AgentStack:
     llm = get_llm_provider()
     embeddings = get_embedding_provider()
 
-    agent_run_service = AgentRunService(AgentRunRepository(session))
+    agent_run_repo = AgentRunRepository(session)
+    agent_run_service = AgentRunService(agent_run_repo)
     memory_service = MemoryService(MemoryRepository(session), embeddings)
-    event_bus = InProcessEventBus(EventRepository(session))
+    event_repo = EventRepository(session)
+    event_bus = InProcessEventBus(event_repo)
 
     approval_repo = ApprovalRepository(session)
     reservation_repo = ReservationRepository(session)
@@ -204,7 +223,20 @@ def build_agent_stack(session: AsyncSession) -> AgentStack:
         inventory_agent=inventory_agent,
         staffing_agent=staffing_agent,
     )
-    workflow_run_service = WorkflowRunService(workflow_run_repo, AgentRunRepository(session))
+    workflow_run_service = WorkflowRunService(workflow_run_repo, agent_run_repo)
+
+    agent_activity_service = AgentActivityService(agent_run_repo)
+    user_repo = UserRepository(session)
+    dashboard_service = DashboardService(
+        reservation_service=reservation_service,
+        inventory_service=inventory_service,
+        staffing_service=staffing_service,
+        approval_service=full_approval_service,
+        agent_activity_service=agent_activity_service,
+        workflow_run_repo=workflow_run_repo,
+        event_repo=event_repo,
+        user_repo=user_repo,
+    )
 
     return AgentStack(
         orchestrator=orchestrator,
@@ -215,4 +247,14 @@ def build_agent_stack(session: AsyncSession) -> AgentStack:
         analytics_agent=analytics_agent,
         workflow_run_service=workflow_run_service,
         background_workflows=background_workflows,
+        reservation_service=reservation_service,
+        inventory_service=inventory_service,
+        customer_service=customer_service,
+        staffing_service=staffing_service,
+        approval_service=full_approval_service,
+        memory_service=memory_service,
+        agent_run_service=agent_run_service,
+        agent_activity_service=agent_activity_service,
+        dashboard_service=dashboard_service,
+        user_repo=user_repo,
     )

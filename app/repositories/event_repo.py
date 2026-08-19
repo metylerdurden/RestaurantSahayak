@@ -32,6 +32,15 @@ class EventRepository(BaseRepository):
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_recent(
+        self, restaurant_id: uuid.UUID, *, event_type: str | None = None, limit: int = 50
+    ) -> list[Event]:
+        stmt = select(Event).where(Event.restaurant_id == restaurant_id)
+        if event_type is not None:
+            stmt = stmt.where(Event.event_type == event_type)
+        stmt = stmt.order_by(Event.created_at.desc()).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def save(self, event: Event) -> Event:
         await self.session.flush()
         return event

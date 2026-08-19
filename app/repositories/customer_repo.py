@@ -12,6 +12,15 @@ class CustomerRepository(BaseRepository):
     async def get_by_id(self, customer_id: uuid.UUID) -> Customer | None:
         return await self.session.get(Customer, customer_id)
 
+    async def list_all(self, restaurant_id: uuid.UUID, *, limit: int = 100) -> list[Customer]:
+        stmt = (
+            select(Customer)
+            .where(Customer.restaurant_id == restaurant_id, Customer.is_active.is_(True))
+            .order_by(Customer.name)
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def find(self, restaurant_id: uuid.UUID, query: str) -> list[Customer]:
         pattern = f"%{query}%"
         stmt = select(Customer).where(

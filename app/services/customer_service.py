@@ -18,6 +18,13 @@ class CustomerService:
         self.repo = repo
         self.event_bus = event_bus
 
+    async def list_customers(self, *, restaurant_id: uuid.UUID, limit: int = 100) -> list[Customer]:
+        """Plain listing for the Manager API's `GET /customers` — distinct from
+        `get_customer`, which requires either an id or a search query (it's built
+        for the Customer Agent's typed tool, where the LLM always has one of those,
+        not for a dashboard's "show me everyone" view)."""
+        return await self.repo.list_all(restaurant_id, limit=limit)
+
     async def get_customer(
         self, *, restaurant_id: uuid.UUID, customer_id: uuid.UUID | None, query: str | None
     ) -> list[Customer]:

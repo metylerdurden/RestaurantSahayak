@@ -21,6 +21,15 @@ have been implemented yet — that begins once the first feature spec and plan e
 - LangGraph (agent orchestration)
 - Docker / Docker Compose (local infrastructure)
 
+## Manager Dashboard
+
+A small manager-facing dashboard (`app/static/`, no build step) is served at `/` by
+the same FastAPI app — dashboard, reservations, inventory, customers, approvals, an
+Agent Activity view (trigger the orchestrator/a specialist and watch its trace:
+Manager Request → Orchestrator → Specialist Agent → Tool → Memory → Result), and
+manual workflow triggers. Backed by `GET/POST /api/v1/*` (see `app/api/routes/`).
+Run the API (`uv run uvicorn app.main:app --reload`) and open http://localhost:8000/.
+
 ## Observability
 
 Every agent run, tool call, LLM call, memory operation, event, approval decision, and

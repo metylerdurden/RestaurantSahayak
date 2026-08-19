@@ -1,0 +1,113 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #dde1e6;
+  --text: #1c2430;
+  --muted: #667085;
+  --accent: #2f5fdb;
+  --ok: #1a7f37;
+  --warn: #b45309;
+  --danger: #b42318;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+header h1 { font-size: 1.1rem; margin: 0; white-space: nowrap; }
+
+nav { display: flex; gap: 0.25rem; padding: 0 1.25rem; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+
+nav button {
+  border: none;
+  background: none;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+nav button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+main { padding: 1.25rem; max-width: 1200px; margin: 0 auto; }
+
+section.view { display: none; }
+section.view.active { display: block; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.card h3 { margin: 0 0 0.6rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+
+.big-number { font-size: 2rem; font-weight: 700; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+
+.empty { color: var(--muted); font-style: italic; font-size: 0.88rem; }
+
+.badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+.badge.low, .badge.understaffed, .badge.pending { background: #fef3e2; color: var(--warn); }
+.badge.out_of_stock, .badge.failed, .badge.error, .badge.rejected { background: #fbeae9; color: var(--danger); }
+.badge.ok, .badge.staffed, .badge.completed, .badge.approved { background: #e7f6ec; color: var(--ok); }
+.badge.running, .badge.pending_approval { background: #eaf0fe; color: var(--accent); }
+
+button.action {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+button.action.secondary { background: white; color: var(--text); border: 1px solid var(--border); }
+button.action.danger { background: var(--danger); }
+button.action:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.row-actions { display: flex; gap: 0.4rem; }
+
+form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; margin-bottom: 1rem; }
+form.inline label { display: flex; flex-direction: column; font-size: 0.78rem; color: var(--muted); gap: 0.2rem; }
+input, select, textarea {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.88rem;
+  font-family: inherit;
+}
+textarea { min-height: 4.5rem; }
+
+.trace-node { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 0.75rem 1rem; margin-bottom: 0.4rem; }
+.trace-arrow { text-align: center; color: var(--muted); margin: 0.1rem 0; font-size: 1.1rem; }
+.trace-children { margin-left: 1.75rem; border-left: 2px dashed var(--border); padding-left: 1rem; }
+.trace-message { font-size: 0.82rem; padding: 0.3rem 0.5rem; border-radius: 6px; background: var(--bg); margin: 0.25rem 0; }
+.trace-message.memory { border-left: 3px solid var(--accent); }
+.trace-message.tool { border-left: 3px solid var(--muted); }
+
+.muted { color: var(--muted); font-size: 0.85rem; }
+.section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }

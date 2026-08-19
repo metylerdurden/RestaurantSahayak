@@ -9,11 +9,16 @@ from datetime import datetime, timedelta, timezone
 
 from app.models import (
     AgentRun,
+    Approval,
     Customer,
+    Event,
     InventoryItem,
     MenuItem,
+    Reservation,
     Restaurant,
     Staff,
+    StaffShift,
+    ShiftAssignment,
     Table,
     User,
 )
@@ -103,6 +108,91 @@ async def make_agent_run(
     session.add(run)
     await session.flush()
     return run
+
+
+async def make_reservation(
+    session, restaurant: Restaurant, customer: Customer, table: Table, *,
+    party_size: int = 4, requested_time: datetime | None = None, status: str = "booked",
+) -> Reservation:
+    r = Reservation(
+        restaurant_id=restaurant.id,
+        customer_id=customer.id,
+        table_id=table.id,
+        party_size=party_size,
+        requested_time=requested_time or future(),
+        status=status,
+        created_via="manager_request",
+    )
+    session.add(r)
+    await session.flush()
+    return r
+
+
+async def make_staff_shift(
+    session, restaurant: Restaurant, *,
+    start_at: datetime | None = None, end_at: datetime | None = None,
+    required_staff_count: int = 4, status: str = "understaffed", is_published: bool = True,
+) -> StaffShift:
+    start = start_at or future(hour=18)
+    end = end_at or (start + timedelta(hours=4))
+    shift = StaffShift(
+        restaurant_id=restaurant.id,
+        start_at=start,
+        end_at=end,
+        required_staff_count=required_staff_count,
+        status=status,
+        is_published=is_published,
+    )
+    session.add(shift)
+    await session.flush()
+    return shift
+
+
+async def make_shift_assignment(session, shift: StaffShift, staff: Staff) -> ShiftAssignment:
+    a = ShiftAssignment(shift_id=shift.id, staff_id=staff.id)
+    session.add(a)
+    await session.flush()
+    return a
+
+
+async def make_approval(
+    session, restaurant: Restaurant, agent_run: AgentRun, *,
+    domain: str = "reservation", action: str = "cancel_reservation",
+    agent_name: str = "reservation", risk_level: str = "MEDIUM",
+    parameters: dict | None = None, reason: str = "Test approval",
+) -> Approval:
+    a = Approval(
+        restaurant_id=restaurant.id,
+        domain=domain,
+        action=action,
+        agent_name=agent_name,
+        proposed_by_agent_run_id=agent_run.id,
+        parameters=parameters or {},
+        reason=reason,
+        risk_level=risk_level,
+        status="pending",
+    )
+    session.add(a)
+    await session.flush()
+    return a
+
+
+async def make_event(
+    session, restaurant: Restaurant, *,
+    event_type: str = "reservation.created", entity_id: uuid.UUID | None = None,
+    payload: dict | None = None, published_by: str = "test",
+) -> Event:
+    e = Event(
+        restaurant_id=restaurant.id,
+        event_type=event_type,
+        entity_id=entity_id,
+        payload=payload or {},
+        correlation_id=uuid.uuid4(),
+        published_by=published_by,
+    )
+    session.add(e)
+    await session.flush()
+    return e
 
 
 def future(days: int = 1, hour: int = 19) -> datetime:

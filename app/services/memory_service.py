@@ -165,6 +165,24 @@ class MemoryService:
             span.set_attribute("success", True)
             return results
 
+    async def list_customer_memories(
+        self, *, restaurant_id: uuid.UUID, customer_id: uuid.UUID, active_only: bool = True, limit: int = 50
+    ) -> list[Memory]:
+        """Plain (non-semantic) listing for the Manager API's
+        `GET /customers/{id}/memories` — "everything remembered about this
+        customer," not "what's most relevant to this query" (that's
+        `search_memory`, which needs a query string an API list view doesn't have)."""
+        with start_span(
+            _tracer, "memory.search", memory_operation="list_by_customer",
+            restaurant_id=str(restaurant_id), customer_id=str(customer_id),
+        ) as span:
+            memories = await self.repo.list_by_customer(
+                restaurant_id, customer_id, active_only=active_only, limit=limit
+            )
+            span.set_attribute("result_count", len(memories))
+            span.set_attribute("success", True)
+            return memories
+
     async def get_memory(
         self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, touch: bool = True
     ) -> Memory:

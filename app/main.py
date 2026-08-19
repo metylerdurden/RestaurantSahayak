@@ -4,17 +4,29 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from opentelemetry import trace
 
+from app.api.routes.agent_runs import router as agent_runs_router
+from app.api.routes.approvals import router as approvals_router
+from app.api.routes.customers import router as customers_router
+from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.health import router as health_router
+from app.api.routes.inventory import router as inventory_router
+from app.api.routes.manager_workflows import router as manager_workflows_router
+from app.api.routes.reservations import router as reservations_router
+from app.api.routes.restaurants import router as restaurants_router
 from app.api.routes.workflows import router as workflows_router
 from app.core.config import get_settings
 from app.core.db import dispose_engine, get_engine
 from app.core.logging import bind_correlation_id, configure_logging, get_logger
 from app.core.telemetry import configure_telemetry, instrument_fastapi, instrument_sqlalchemy
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
@@ -65,6 +77,21 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(workflows_router)
+    app.include_router(dashboard_router)
+    app.include_router(agent_runs_router)
+    app.include_router(reservations_router)
+    app.include_router(inventory_router)
+    app.include_router(customers_router)
+    app.include_router(approvals_router)
+    app.include_router(manager_workflows_router)
+    app.include_router(restaurants_router)
+
+    # The manager dashboard (Step 19): a small static single-page app, no build
+    # step. Mounted last and at "/" so it never shadows an API route registered
+    # above — Starlette matches routes in registration order, and `html=True`
+    # serves static/index.html for "/" and any unmatched sub-path.
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="dashboard")
 
     return app
 

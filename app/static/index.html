@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DineOps Manager Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>DineOps</h1>
+    <label class="muted">Restaurant
+      <select id="restaurant-select"></select>
+    </label>
+    <span id="manager-info" class="muted"></span>
+    <span style="flex:1"></span>
+    <button class="action secondary" id="refresh-btn">Refresh</button>
+  </header>
+
+  <nav id="nav">
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="reservations">Reservations</button>
+    <button data-view="inventory">Inventory</button>
+    <button data-view="customers">Customers</button>
+    <button data-view="approvals">Approvals</button>
+    <button data-view="agent-activity">Agent Activity</button>
+    <button data-view="workflows">Workflows</button>
+  </nav>
+
+  <main>
+    <section id="view-dashboard" class="view active">
+      <div class="grid">
+        <div class="card">
+          <h3>Expected Covers Today</h3>
+          <div class="big-number" id="dash-covers">–</div>
+        </div>
+        <div class="card">
+          <h3>Today's Reservations</h3>
+          <div id="dash-reservations"></div>
+        </div>
+        <div class="card">
+          <h3>Inventory Alerts</h3>
+          <div id="dash-inventory"></div>
+        </div>
+        <div class="card">
+          <h3>Staffing Alerts</h3>
+          <div id="dash-staffing"></div>
+        </div>
+        <div class="card">
+          <h3>Pending Approvals</h3>
+          <div id="dash-approvals"></div>
+        </div>
+        <div class="card">
+          <h3>Recent Agent Activity</h3>
+          <div id="dash-activity"></div>
+        </div>
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>Daily Briefing</h3>
+          <div id="dash-briefing"></div>
+        </div>
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>Recent Operational Events</h3>
+          <div id="dash-events"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-reservations" class="view">
+      <div class="section-title"><h2>Reservations</h2></div>
+      <form class="inline" id="create-reservation-form">
+        <label>Customer id <input name="customer_id" required size="36" /></label>
+        <label>Party size <input name="party_size" type="number" min="1" required /></label>
+        <label>Requested time <input name="requested_time" type="datetime-local" required /></label>
+        <label>Table id (optional) <input name="table_id" size="36" /></label>
+        <label>Notes <input name="notes" /></label>
+        <button class="action" type="submit">Create reservation</button>
+      </form>
+      <div id="reservations-table"></div>
+    </section>
+
+    <section id="view-inventory" class="view">
+      <h2>Inventory</h2>
+      <div id="inventory-table"></div>
+    </section>
+
+    <section id="view-customers" class="view">
+      <h2>Customers</h2>
+      <div id="customers-list"></div>
+      <div id="customer-detail"></div>
+    </section>
+
+    <section id="view-approvals" class="view">
+      <h2>Approvals</h2>
+      <div id="approvals-list"></div>
+    </section>
+
+    <section id="view-agent-activity" class="view">
+      <h2>Agent Activity</h2>
+      <p class="muted">Manager Request &rarr; Orchestrator &rarr; Specialist Agent &rarr; Tool &rarr; Memory &rarr; Result</p>
+      <form class="inline" id="trigger-agent-form">
+        <label>Agent
+          <select name="agent_name">
+            <option value="orchestrator">orchestrator</option>
+            <option value="reservation">reservation</option>
+            <option value="customer">customer</option>
+            <option value="inventory">inventory</option>
+            <option value="staffing">staffing</option>
+            <option value="analytics">analytics</option>
+          </select>
+        </label>
+        <label style="flex:1">Task <input name="task" style="width:100%" placeholder="e.g. Are we ready for tonight?" required /></label>
+        <button class="action" type="submit">Run</button>
+      </form>
+      <div id="trigger-result" class="muted"></div>
+      <div class="grid">
+        <div>
+          <h3>Recent Runs</h3>
+          <div id="agent-runs-list"></div>
+        </div>
+        <div>
+          <h3>Trace</h3>
+          <div id="agent-run-trace"><p class="empty">Select a run to see its trace.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-workflows" class="view">
+      <h2>Workflows</h2>
+      <div class="row-actions" style="margin-bottom:1rem">
+        <button class="action" data-workflow="daily-briefing">Run Daily Briefing</button>
+        <button class="action" data-workflow="inventory-check">Run Inventory Check</button>
+        <button class="action" data-workflow="staffing-check">Run Staffing Check</button>
+      </div>
+      <pre id="workflow-result" class="card"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -57,6 +57,20 @@ class MemoryRepository(BaseRepository):
         rows = (await self.session.execute(stmt)).all()
         return [(row[0], row[1]) for row in rows]
 
+    async def list_by_customer(
+        self, restaurant_id: uuid.UUID, customer_id: uuid.UUID, *, active_only: bool = True, limit: int = 50
+    ) -> list[Memory]:
+        """A plain (non-semantic) listing — no embedding/query needed — for a
+        dashboard panel showing everything remembered about one customer, as
+        opposed to `search_by_embedding`'s "most relevant to this query" retrieval."""
+        stmt = select(Memory).where(
+            Memory.restaurant_id == restaurant_id, Memory.customer_id == customer_id
+        )
+        if active_only:
+            stmt = stmt.where(Memory.is_active.is_(True))
+        stmt = stmt.order_by(Memory.importance.desc(), Memory.updated_at.desc()).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def touch_access(self, memory: Memory) -> Memory:
         memory.access_count += 1
         memory.last_accessed_at = _utcnow()

@@ -26,6 +26,15 @@ class AgentRunRepository(BaseRepository):
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def list_recent(
+        self, restaurant_id: uuid.UUID, *, agent_name: str | None = None, limit: int = 20
+    ) -> list[AgentRun]:
+        stmt = select(AgentRun).where(AgentRun.restaurant_id == restaurant_id)
+        if agent_name is not None:
+            stmt = stmt.where(AgentRun.agent_name == agent_name)
+        stmt = stmt.order_by(AgentRun.started_at.desc()).limit(limit)
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def save(self, run: AgentRun) -> AgentRun:
         await self.session.flush()
         return run
