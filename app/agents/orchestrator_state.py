@@ -62,6 +62,11 @@ class OrchestratorGraphState(TypedDict):
     finished: bool
     final_response: str | None
     error: str | None
+    # Set by _delegate_node when a specialist comes back pending_approval; consumed
+    # by _await_approval_node, which LangGraph pauses at (interrupt()) until a human
+    # decision resumes the graph via OrchestratorAgent.resume().
+    pending_approval_id: str | None
+    pending_approval_agent: str | None
 
 
 # --- public result types ---
@@ -77,9 +82,13 @@ class SpecialistInvocationRecord(BaseModel):
 
 class OrchestratorResult(BaseModel):
     orchestrator_run_id: uuid.UUID
-    status: Literal["completed", "error"]
+    status: Literal["completed", "pending_approval", "error"]
     summary: str
     invocations: list[SpecialistInvocationRecord]
     pending_approvals: list[SpecialistInvocationRecord] = Field(default_factory=list)
     latency_ms: int
     error: str | None = None
+    # Set only when status == "pending_approval": the approval that paused the
+    # workflow, and the thread_id (== orchestrator_run_id, as a string) that must be
+    # passed back into OrchestratorAgent.resume() to continue it.
+    awaiting_approval_id: uuid.UUID | None = None

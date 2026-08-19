@@ -168,10 +168,10 @@ async def test_cancel_large_party_full_approval_round_trip(db_session):
     assert get_output.reservations[0].status == "booked"
 
     # Reject path: should leave the reservation untouched and be terminal.
-    approval = await approval_service.decide(cancel_result.approval_id, "rejected", user.id)
+    approval = await approval_service.reject(cancel_result.approval_id, user.id)
     assert approval.status == "rejected"
     with pytest.raises(ToolError):
-        await approval_service.decide(cancel_result.approval_id, "approved", user.id)
+        await approval_service.approve(cancel_result.approval_id, user.id)
 
     get_output_after_reject = await GetReservationsTool(service)({}, context=context)
     assert get_output_after_reject.reservations[0].status == "booked"
@@ -199,7 +199,7 @@ async def test_cancel_large_party_approved_actually_cancels(db_session):
     cancel_result = await CancelReservationTool(service)(
         {"reservation_id": str(create_output.reservation.id)}, context=context
     )
-    approval = await approval_service.decide(cancel_result.approval_id, "approved", user.id)
+    approval = await approval_service.approve(cancel_result.approval_id, user.id)
     assert approval.status == "approved"
 
     reservation = await service.execute_approved_action(approval)

@@ -154,7 +154,7 @@ async def test_cancel_small_party_executes_immediately_without_approval():
 
     assert isinstance(result, Reservation)
     assert result.status == "cancelled"
-    approval_service.propose.assert_not_called()
+    approval_service.create_approval_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -174,8 +174,8 @@ async def test_cancel_large_party_requires_approval_and_does_not_mutate():
     repo.get_by_id.return_value = reservation
     approval_service = AsyncMock(spec=ApprovalService)
     approval_id = uuid.uuid4()
-    approval_service.propose.return_value = type(
-        "FakeApproval", (), {"id": approval_id, "summary": "Cancel reservation for party of 8"}
+    approval_service.create_approval_request.return_value = type(
+        "FakeApproval", (), {"id": approval_id, "reason": "Cancel reservation for party of 8"}
     )()
     service = _service(repo=repo, approval_service=approval_service)
 

@@ -162,20 +162,22 @@ class ReservationService:
 
         if high_impact:
             agent_run_id = await self._require_agent_run(context)
-            approval = await self.approval_service.propose(
+            approval = await self.approval_service.create_approval_request(
                 restaurant_id=restaurant_id,
                 domain="reservation",
-                proposed_by_tool="modify_reservation",
+                action="modify_reservation",
+                agent_name=context.acting_agent,
                 proposed_by_agent_run_id=agent_run_id,
-                proposed_action={
+                parameters={
                     "action": "modify_reservation",
                     "reservation_id": str(reservation_id),
                     "changes": changes,
                 },
-                summary=f"Modify reservation for party of {effective_party_size} "
+                reason=f"Modify reservation for party of {effective_party_size} "
                 f"on {reservation.requested_time.date()}",
+                risk_level="MEDIUM",
             )
-            return PendingApprovalOutput(approval_id=approval.id, summary=approval.summary)
+            return PendingApprovalOutput(approval_id=approval.id, summary=approval.reason)
 
         await self._apply_modification(reservation, changes)
         reservation.status = "modified"
@@ -200,20 +202,22 @@ class ReservationService:
 
         if self._is_high_impact_party(reservation.party_size):
             agent_run_id = await self._require_agent_run(context)
-            approval = await self.approval_service.propose(
+            approval = await self.approval_service.create_approval_request(
                 restaurant_id=restaurant_id,
                 domain="reservation",
-                proposed_by_tool="cancel_reservation",
+                action="cancel_reservation",
+                agent_name=context.acting_agent,
                 proposed_by_agent_run_id=agent_run_id,
-                proposed_action={
+                parameters={
                     "action": "cancel_reservation",
                     "reservation_id": str(reservation_id),
                     "reason": reason,
                 },
-                summary=f"Cancel reservation for party of {reservation.party_size} "
+                reason=f"Cancel reservation for party of {reservation.party_size} "
                 f"on {reservation.requested_time.date()}",
+                risk_level="MEDIUM",
             )
-            return PendingApprovalOutput(approval_id=approval.id, summary=approval.summary)
+            return PendingApprovalOutput(approval_id=approval.id, summary=approval.reason)
 
         reservation.status = "cancelled"
         if reason:
@@ -254,22 +258,24 @@ class ReservationService:
             reservation.notes = changes["notes"]
 
     async def execute_approved_action(self, approval) -> Reservation:
-        """Applies an approved reservation action. In production this is invoked by
-        the Phase 9 approval-decision API route once ApprovalService.decide() returns
-        `status == "approved"`; exercised directly by integration tests here."""
-        action = approval.proposed_action["action"]
-        reservation_id = uuid.UUID(approval.proposed_action["reservation_id"])
+        """Applies an approved reservation action. Invoked automatically by
+        ApprovalService.approve() when wired with an executor (see
+        app.services.approval_execution.build_executors); still directly callable
+        (e.g. by tests, or manually) for a caller that only wants ApprovalService's
+        plain decision state machine."""
+        action = approval.parameters["action"]
+        reservation_id = uuid.UUID(approval.parameters["reservation_id"])
         reservation = await self.repo.get_by_id(reservation_id)
         if reservation is None:
             raise ToolError("reservation_not_found", f"No reservation found with id {reservation_id}")
 
         if action == "cancel_reservation":
             reservation.status = "cancelled"
-            reason = approval.proposed_action.get("reason")
+            reason = approval.parameters.get("reason")
             if reason:
                 reservation.notes = f"{reservation.notes or ''}\nCancellation reason: {reason}".strip()
         elif action == "modify_reservation":
-            await self._apply_modification(reservation, approval.proposed_action.get("changes", {}))
+            await self._apply_modification(reservation, approval.parameters.get("changes", {}))
             reservation.status = "modified"
         else:
             raise ToolError("unsupported_action", f"Cannot execute approved action: {action}")

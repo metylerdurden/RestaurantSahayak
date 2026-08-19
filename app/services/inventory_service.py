@@ -114,20 +114,22 @@ class InventoryService:
                 status="pending_approval",
                 requested_by_agent_run_id=context.agent_run_id,
             )
-            approval = await self.approval_service.propose(
+            approval = await self.approval_service.create_approval_request(
                 restaurant_id=restaurant_id,
                 domain="purchase",
-                proposed_by_tool="create_purchase_request",
+                action="create_purchase_request",
+                agent_name=context.acting_agent,
                 proposed_by_agent_run_id=context.agent_run_id,
-                proposed_action={
+                parameters={
                     "action": "approve_purchase_request",
                     "purchase_request_id": str(purchase_request.id),
                 },
-                summary=f"Purchase {requested_quantity} units, estimated cost {estimated_cost}",
+                reason=f"Purchase {requested_quantity} units, estimated cost {estimated_cost}",
+                risk_level="HIGH",
             )
             purchase_request.approval_id = approval.id
             await self.repo.save_purchase_request(purchase_request)
-            return PendingApprovalOutput(approval_id=approval.id, summary=approval.summary)
+            return PendingApprovalOutput(approval_id=approval.id, summary=approval.reason)
 
         return await self.repo.create_purchase_request(
             restaurant_id=restaurant_id,
@@ -139,13 +141,14 @@ class InventoryService:
         )
 
     async def execute_approved_action(self, approval) -> PurchaseRequest:
-        """Applies an approved purchase request (Phase 9 territory in production —
-        exercised directly by integration tests here, same pattern as
-        ReservationService.execute_approved_action)."""
-        action = approval.proposed_action["action"]
+        """Applies an approved purchase request. Invoked automatically by
+        ApprovalService.approve() when wired with an executor (see
+        app.services.approval_execution.build_executors); still directly callable
+        for a caller that only wants ApprovalService's plain decision state machine."""
+        action = approval.parameters["action"]
         if action != "approve_purchase_request":
             raise ToolError("unsupported_action", f"Cannot execute approved action: {action}")
-        purchase_request_id = uuid.UUID(approval.proposed_action["purchase_request_id"])
+        purchase_request_id = uuid.UUID(approval.parameters["purchase_request_id"])
         purchase_request = await self.repo.get_purchase_request(purchase_request_id)
         if purchase_request is None:
             raise ToolError(

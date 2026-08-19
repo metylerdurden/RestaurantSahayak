@@ -116,7 +116,7 @@ async def test_create_purchase_request_full_approval_round_trip(db_session):
     )
     assert isinstance(result, PendingApprovalOutput)
 
-    approval = await approval_service.decide(result.approval_id, "approved", user.id)
+    approval = await approval_service.approve(result.approval_id, user.id)
     purchase_request = await service.execute_approved_action(approval)
     assert purchase_request.status == "approved"
 

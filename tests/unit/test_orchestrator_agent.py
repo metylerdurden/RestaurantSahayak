@@ -2,16 +2,16 @@
 real LLM, no database, no real specialist logic. Proves the LangGraph wiring itself:
 delegation loop, multi-agent sequencing, state passed to each specialist
 (parent_run_id/correlation_id linking), retry-on-error, the max-delegations guard,
-pending-approval surfacing, and graceful handling of malformed/unrecognized routing
-decisions. Real Qwen3-8B routing/combination behavior against real specialist agents
-is exercised in tests/integration/test_orchestrator_agent.py (real DB, scripted LLMs)
-and tests/integration/test_orchestrator_agent_live.py (real model)."""
+pending-approval pause/resume, and graceful handling of malformed/unrecognized
+routing decisions. Real Qwen3-8B routing/combination behavior against real specialist
+agents is exercised in tests/integration/test_orchestrator_agent.py (real DB,
+scripted LLMs) and tests/integration/test_orchestrator_agent_live.py (real model)."""
 
 from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -20,6 +20,7 @@ from app.agents.state import AgentResult, ToolCallRecord
 from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
 from app.repositories.agent_run_repo import AgentRunRepository
 from app.services.agent_run_service import AgentRunService
+from app.services.approval_service import ApprovalService
 
 RESTAURANT_ID = uuid.uuid4()
 
@@ -196,27 +197,131 @@ async def test_customer_result_is_used_to_inform_the_reservation_instruction(age
 
 
 @pytest.mark.asyncio
-async def test_pending_approval_result_is_surfaced_not_hidden(agent_run_service):
+async def test_pending_approval_pauses_the_graph_instead_of_finishing(agent_run_service):
     approval_id = uuid.uuid4()
     reservation = FakeSpecialist(
         "reservation",
-        [_result(status="pending_approval", summary="Cancelling this large party requires manager approval.", data={"approval_id": str(approval_id), "status": "pending_approval"})],
+        [_result(
+            status="pending_approval",
+            summary="Cancelling this large party requires manager approval.",
+            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "..."},
+        )],
     )
-    responses = [
-        _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
-        _finish(),
-        _final("That cancellation requires manager approval and has not taken effect yet."),
-    ]
+    # Only one LLM turn should ever be consumed — the graph must pause at
+    # await_approval before decide() is called again.
+    responses = [_delegate("c0", "reservation", "Cancel the reservation for the party of 8.")]
+    approval_service = AsyncMock(spec=ApprovalService)
     orchestrator = OrchestratorAgent(
-        llm=ScriptedLLM(responses), specialists={"reservation": reservation}, agent_run_service=agent_run_service
+        llm=ScriptedLLM(responses),
+        specialists={"reservation": reservation},
+        agent_run_service=agent_run_service,
+        approval_service=approval_service,
     )
 
     result = await orchestrator.handle("Cancel the party of 8's reservation.", restaurant_id=RESTAURANT_ID)
 
-    assert result.status == "completed"
+    assert result.status == "pending_approval"
+    assert result.awaiting_approval_id == approval_id
     assert len(result.pending_approvals) == 1
     assert result.pending_approvals[0].agent_name == "reservation"
-    assert "approval" in result.summary.lower()
+    approval_service.approve.assert_not_called()
+    approval_service.reject.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_after_approval_executes_and_completes_the_workflow(agent_run_service):
+    approval_id = uuid.uuid4()
+    reservation = FakeSpecialist(
+        "reservation",
+        [_result(
+            status="pending_approval", summary="Needs approval.",
+            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+        )],
+    )
+    responses = [
+        _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
+        _finish(),
+        _final("The cancellation was approved and executed."),
+    ]
+    approval_service = AsyncMock(spec=ApprovalService)
+    approval_service.approve.return_value = SimpleNamespace(
+        reason="Cancel reservation for party of 8",
+        execution_result={"status": "success", "result": {"status": "cancelled"}},
+    )
+    orchestrator = OrchestratorAgent(
+        llm=ScriptedLLM(responses),
+        specialists={"reservation": reservation},
+        agent_run_service=agent_run_service,
+        approval_service=approval_service,
+    )
+
+    paused = await orchestrator.handle("Cancel the party of 8's reservation.", restaurant_id=RESTAURANT_ID)
+    assert paused.status == "pending_approval"
+
+    decided_by = uuid.uuid4()
+    resumed = await orchestrator.resume(paused.orchestrator_run_id, decision="approved", decided_by_user_id=decided_by)
+
+    assert resumed.status == "completed"
+    assert "approved and executed" in resumed.summary.lower()
+    approval_service.approve.assert_called_once_with(approval_id, decided_by)
+
+
+@pytest.mark.asyncio
+async def test_resume_after_rejection_does_not_execute(agent_run_service):
+    approval_id = uuid.uuid4()
+    reservation = FakeSpecialist(
+        "reservation",
+        [_result(
+            status="pending_approval", summary="Needs approval.",
+            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+        )],
+    )
+    responses = [
+        _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
+        _finish(),
+        _final("The manager rejected the cancellation; the reservation stands."),
+    ]
+    approval_service = AsyncMock(spec=ApprovalService)
+    approval_service.reject.return_value = SimpleNamespace(
+        reason="Cancel reservation for party of 8", execution_result=None
+    )
+    orchestrator = OrchestratorAgent(
+        llm=ScriptedLLM(responses),
+        specialists={"reservation": reservation},
+        agent_run_service=agent_run_service,
+        approval_service=approval_service,
+    )
+
+    paused = await orchestrator.handle("Cancel the party of 8's reservation.", restaurant_id=RESTAURANT_ID)
+    decided_by = uuid.uuid4()
+    resumed = await orchestrator.resume(paused.orchestrator_run_id, decision="rejected", decided_by_user_id=decided_by)
+
+    assert resumed.status == "completed"
+    assert "rejected" in resumed.summary.lower()
+    approval_service.reject.assert_called_once_with(approval_id, decided_by)
+    approval_service.approve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_without_approval_service_configured_errors_safely(agent_run_service):
+    approval_id = uuid.uuid4()
+    reservation = FakeSpecialist(
+        "reservation",
+        [_result(
+            status="pending_approval", summary="Needs approval.",
+            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+        )],
+    )
+    responses = [_delegate("c0", "reservation", "Cancel the reservation for the party of 8.")]
+    orchestrator = OrchestratorAgent(
+        llm=ScriptedLLM(responses), specialists={"reservation": reservation}, agent_run_service=agent_run_service,
+    )  # no approval_service
+
+    paused = await orchestrator.handle("Cancel the party of 8's reservation.", restaurant_id=RESTAURANT_ID)
+    assert paused.status == "pending_approval"
+
+    resumed = await orchestrator.resume(paused.orchestrator_run_id, decision="approved", decided_by_user_id=uuid.uuid4())
+    assert resumed.status == "error"
 
 
 @pytest.mark.asyncio

@@ -98,7 +98,7 @@ async def test_create_purchase_request_below_threshold_auto_approves():
         context=_context(),
     )
     assert result.status == "approved"
-    approval_service.propose.assert_not_called()
+    approval_service.create_approval_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -108,8 +108,8 @@ async def test_create_purchase_request_above_threshold_requires_approval():
     pr_stub = type("PR", (), {"id": uuid.uuid4(), "approval_id": None})()
     repo.create_purchase_request.return_value = pr_stub
     approval_service = AsyncMock(spec=ApprovalService)
-    approval_stub = type("Approval", (), {"id": uuid.uuid4(), "summary": "Purchase 50 units"})()
-    approval_service.propose.return_value = approval_stub
+    approval_stub = type("Approval", (), {"id": uuid.uuid4(), "reason": "Purchase 50 units"})()
+    approval_service.create_approval_request.return_value = approval_stub
     service = InventoryService(repo, approval_service, _settings())
 
     result = await service.create_purchase_request(

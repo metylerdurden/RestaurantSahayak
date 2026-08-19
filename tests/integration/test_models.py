@@ -193,11 +193,13 @@ async def test_approval_cannot_be_approved_without_a_decision(db_session):
         Approval(
             restaurant_id=restaurant.id,
             domain="reservation",
-            proposed_by_tool="cancel_reservation",
+            action="cancel_reservation",
+            agent_name="reservation",
             proposed_by_agent_run_id=run.id,
-            proposed_action={"tool": "cancel_reservation", "args": {}},
-            summary="Cancel a large party",
-            status="approved",  # missing decided_by_user_id / decided_at
+            parameters={"tool": "cancel_reservation", "args": {}},
+            reason="Cancel a large party",
+            risk_level="MEDIUM",
+            status="approved",  # missing decided_by_user_id / approved_at
         )
     )
     with pytest.raises(IntegrityError):
@@ -213,13 +215,15 @@ async def test_approval_with_full_decision_is_valid(db_session):
         Approval(
             restaurant_id=restaurant.id,
             domain="reservation",
-            proposed_by_tool="cancel_reservation",
+            action="cancel_reservation",
+            agent_name="reservation",
             proposed_by_agent_run_id=run.id,
-            proposed_action={"tool": "cancel_reservation", "args": {}},
-            summary="Cancel a large party",
+            parameters={"tool": "cancel_reservation", "args": {}},
+            reason="Cancel a large party",
+            risk_level="MEDIUM",
             status="approved",
             decided_by_user_id=user.id,
-            decided_at=datetime.now(timezone.utc),
+            approved_at=datetime.now(timezone.utc),
         )
     )
     await db_session.flush()  # should not raise

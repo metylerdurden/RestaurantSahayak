@@ -4,7 +4,8 @@ coordinating other agents — decide who's needed, delegate, decide if someone e
 now needed, loop, combine — is a genuinely graph-shaped control problem, not a flat
 tool-calling loop.
 
-    Orchestrator -> LangGraph(decide -> delegate -> decide -> ... -> combine)
+    Orchestrator -> LangGraph(decide -> delegate -> [await_approval] -> decide ->
+                    ... -> combine)
                  -> specialist.handle() for each ReservationAgent/CustomerAgent/
                     InventoryAgent/StaffingAgent/AnalyticsAgent instance it holds
 
@@ -14,6 +15,17 @@ directly — its only interface to a specialist is that specialist's own
 `.handle(task, ...) -> AgentResult`, exactly the interface a manager would use. It
 does not decide *how* a reservation gets booked or a memory gets recalled; it only
 decides *which* specialist to ask and *when* it has enough to answer.
+
+Pause/resume: when a delegated specialist comes back with `status="pending_approval"`,
+the graph does not treat that as a normal result to report and move past — it
+genuinely pauses (LangGraph's `interrupt()`, backed by an in-memory checkpointer
+keyed by the orchestrator's own run id) and `handle()` returns a
+`status="pending_approval"` result instead of a final answer. The workflow resumes
+only via `resume()`, which records the manager's decision through ApprovalService
+(approve()/reject() — the same deterministic, non-LLM path used anywhere else an
+approval is decided) and continues the graph from exactly where it paused. Nothing
+in this class ever calls a specialist's tools directly to force an approved action
+through some other way; execution happens only inside ApprovalService.approve().
 """
 
 from __future__ import annotations
@@ -24,7 +36,9 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from app.agents.orchestrator_state import (
     DelegateDecision,
@@ -39,6 +53,7 @@ from app.agents.tool_calling_agent import ToolCallingAgent
 from app.core.logging import get_logger
 from app.llm.base import LLMMessage, LLMProvider
 from app.services.agent_run_service import AgentRunService
+from app.services.approval_service import ApprovalService
 from app.tools.base import utcnow
 
 _logger = get_logger(__name__)
@@ -104,12 +119,14 @@ class OrchestratorAgent:
         llm: LLMProvider,
         specialists: dict[str, ToolCallingAgent],
         agent_run_service: AgentRunService,
+        approval_service: ApprovalService | None = None,
         max_delegations: int = 6,
         max_retries_per_agent: int = 1,
     ) -> None:
         self.llm = llm
         self.specialists = specialists
         self.agent_run_service = agent_run_service
+        self.approval_service = approval_service
         self.max_delegations = max_delegations
         self.max_retries_per_agent = max_retries_per_agent
 
@@ -118,9 +135,15 @@ class OrchestratorAgent:
             for name in specialists
         )
         self._decide_system_prompt = ORCHESTRATOR_DECIDE_SYSTEM_PROMPT.format(specialists_listing=listing)
+        # In-memory checkpointer: state for a paused workflow lives only in this
+        # OrchestratorAgent instance/process for now — the same simplification every
+        # other subsystem here makes (e.g. the LLM/embedding providers are also
+        # process-local). A persistent checkpointer would be a drop-in swap here for
+        # durability across restarts, not a redesign.
+        self._checkpointer = InMemorySaver()
         self._graph = self._build_graph()
 
-    # --- public interface, same shape as ToolCallingAgent.handle() ---
+    # --- public interface ---
 
     async def handle(
         self,
@@ -159,47 +182,116 @@ class OrchestratorAgent:
             "finished": False,
             "final_response": None,
             "error": None,
+            "pending_approval_id": None,
+            "pending_approval_agent": None,
         }
+        config = {"configurable": {"thread_id": str(run.id)}}
 
-        invocations: list[SpecialistInvocationRecord] = []
         try:
-            final_state = await self._graph.ainvoke(initial_state)
-            status: Literal["completed", "error"] = "completed"
-            summary = final_state.get("final_response") or "Done."
-            invocations = [
-                SpecialistInvocationRecord(
-                    agent_name=inv["agent_name"],
-                    task=inv["task"],
-                    status=inv["result"]["status"],
-                    summary=inv["result"]["summary"],
-                    data=inv["result"].get("data"),
-                )
-                for inv in final_state.get("invocations", [])
-            ]
+            final_state = await self._graph.ainvoke(initial_state, config=config)
         except Exception as exc:  # the LLM/HTTP/graph boundary — never let this crash the caller
             log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
-            status = "error"
-            summary = "The orchestrator hit an unexpected internal error and could not complete the request."
+            return await self._finalize_error(run.id, started_at, log)
 
-        pending_approvals = [inv for inv in invocations if inv.status == "pending_approval"]
+        return await self._finalize(final_state, run.id, started_at, log)
+
+    async def resume(
+        self,
+        orchestrator_run_id: uuid.UUID,
+        *,
+        decision: Literal["approved", "rejected"],
+        decided_by_user_id: uuid.UUID | None = None,
+    ) -> OrchestratorResult:
+        """Continues a workflow paused by handle() returning status="pending_approval".
+        Must be called on the same OrchestratorAgent instance that paused it (the
+        in-memory checkpointer is scoped to this instance)."""
+        started_at = time.monotonic()
+        log = _logger.bind(agent_run_id=str(orchestrator_run_id), agent_name=self.name)
+        config = {"configurable": {"thread_id": str(orchestrator_run_id)}}
+
+        try:
+            final_state = await self._graph.ainvoke(
+                Command(
+                    resume={
+                        "decision": decision,
+                        "decided_by_user_id": str(decided_by_user_id) if decided_by_user_id else None,
+                    }
+                ),
+                config=config,
+            )
+        except Exception as exc:
+            log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
+            return await self._finalize_error(orchestrator_run_id, started_at, log)
+
+        return await self._finalize(final_state, orchestrator_run_id, started_at, log)
+
+    # --- shared result-building ---
+
+    async def _finalize(
+        self, final_state: dict[str, Any], run_id: uuid.UUID, started_at: float, log: Any
+    ) -> OrchestratorResult:
         latency_ms = int((time.monotonic() - started_at) * 1000)
+        invocations = [
+            SpecialistInvocationRecord(
+                agent_name=inv["agent_name"],
+                task=inv["task"],
+                status=inv["result"]["status"],
+                summary=inv["result"]["summary"],
+                data=inv["result"].get("data"),
+            )
+            for inv in final_state.get("invocations", [])
+        ]
+        pending_approvals = [inv for inv in invocations if inv.status == "pending_approval"]
 
-        await self.agent_run_service.log_message(run_id=run.id, role="assistant", content={"content": summary})
-        await self.agent_run_service.complete_run(
-            run_id=run.id,
-            status="completed" if status != "error" else "failed",
-            outcome_summary=summary,
-        )
-        log.info("orchestrator.finished", status=status, latency_ms=latency_ms, delegations=len(invocations))
+        if "__interrupt__" in final_state:
+            payload = final_state["__interrupt__"][0].value
+            summary = (
+                f"Waiting for manager approval on a {payload.get('agent_name', 'specialist')} action "
+                f"(approval_id={payload.get('approval_id')}) before continuing."
+            )
+            log.info("orchestrator.paused_for_approval", approval_id=payload.get("approval_id"))
+            await self.agent_run_service.log_message(
+                run_id=run_id, role="assistant", content={"pending_approval": payload}
+            )
+            # Deliberately does NOT call complete_run() — the AgentRun stays
+            # "running" because the workflow itself is still in progress, just
+            # paused, not finished.
+            return OrchestratorResult(
+                orchestrator_run_id=run_id,
+                status="pending_approval",
+                summary=summary,
+                invocations=invocations,
+                pending_approvals=pending_approvals,
+                latency_ms=latency_ms,
+                awaiting_approval_id=uuid.UUID(payload["approval_id"]) if payload.get("approval_id") else None,
+            )
+
+        summary = final_state.get("final_response") or "Done."
+        await self.agent_run_service.log_message(run_id=run_id, role="assistant", content={"content": summary})
+        await self.agent_run_service.complete_run(run_id=run_id, status="completed", outcome_summary=summary)
+        log.info("orchestrator.finished", status="completed", latency_ms=latency_ms, delegations=len(invocations))
 
         return OrchestratorResult(
-            orchestrator_run_id=run.id,
-            status=status,
+            orchestrator_run_id=run_id,
+            status="completed",
             summary=summary,
             invocations=invocations,
             pending_approvals=pending_approvals,
             latency_ms=latency_ms,
-            error=summary if status == "error" else None,
+        )
+
+    async def _finalize_error(self, run_id: uuid.UUID, started_at: float, log: Any) -> OrchestratorResult:
+        summary = "The orchestrator hit an unexpected internal error and could not complete the request."
+        latency_ms = int((time.monotonic() - started_at) * 1000)
+        await self.agent_run_service.complete_run(run_id=run_id, status="failed", outcome_summary=summary)
+        log.info("orchestrator.finished", status="error", latency_ms=latency_ms, delegations=0)
+        return OrchestratorResult(
+            orchestrator_run_id=run_id,
+            status="error",
+            summary=summary,
+            invocations=[],
+            latency_ms=latency_ms,
+            error=summary,
         )
 
     # --- LangGraph wiring ---
@@ -208,21 +300,27 @@ class OrchestratorAgent:
         graph = StateGraph(OrchestratorGraphState)
         graph.add_node("decide", self._decide_node)
         graph.add_node("delegate", self._delegate_node)
+        graph.add_node("await_approval", self._await_approval_node)
         graph.add_node("combine", self._combine_node)
         graph.add_edge(START, "decide")
         graph.add_conditional_edges(
             "decide", self._route_after_decide, {"delegate": "delegate", "combine": "combine"}
         )
         graph.add_conditional_edges(
-            "delegate", self._route_after_delegate, {"decide": "decide", "combine": "combine"}
+            "delegate",
+            self._route_after_delegate,
+            {"await_approval": "await_approval", "decide": "decide", "combine": "combine"},
         )
+        graph.add_edge("await_approval", "decide")
         graph.add_edge("combine", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self._checkpointer)
 
     def _route_after_decide(self, state: OrchestratorGraphState) -> str:
         return "combine" if state.get("finished") or not state.get("next_agent") else "delegate"
 
     def _route_after_delegate(self, state: OrchestratorGraphState) -> str:
+        if state.get("pending_approval_id"):
+            return "await_approval"
         return "combine" if state["remaining_steps"] <= 0 else "decide"
 
     # --- nodes ---
@@ -315,7 +413,8 @@ class OrchestratorAgent:
         attempt = 1
         # Bounded retry: a delegated specialist's own LLM call can fail transiently
         # (e.g. a live-model hiccup); one retry with the same instruction before
-        # accepting the failure and moving on.
+        # accepting the failure and moving on. A pending_approval result is never
+        # retried — retrying would just create a second, duplicate approval request.
         while result.status == "error" and attempt <= self.max_retries_per_agent:
             result = await _call()
             attempt += 1
@@ -326,11 +425,66 @@ class OrchestratorAgent:
             "result": result.model_dump(mode="json"),
             "attempt": attempt,
         }
-        return {
+        update: dict[str, Any] = {
             "invocations": [invocation],
             "remaining_steps": state["remaining_steps"] - 1,
             "next_agent": None,
             "next_instruction": None,
+        }
+        if result.status == "pending_approval":
+            approval_id = (result.data or {}).get("approval_id")
+            update["pending_approval_id"] = approval_id
+            update["pending_approval_agent"] = agent_name
+        return update
+
+    async def _await_approval_node(self, state: OrchestratorGraphState) -> dict[str, Any]:
+        # Nothing before interrupt() may have side effects — LangGraph re-runs this
+        # node from the top on resume, and interrupt() is what makes that safe: the
+        # first time through it pauses the graph, the second time (after resume) it
+        # returns the value passed to Command(resume=...) instead of pausing again.
+        decision_payload = interrupt(
+            {
+                "type": "approval_required",
+                "approval_id": state["pending_approval_id"],
+                "agent_name": state["pending_approval_agent"],
+            }
+        )
+
+        if self.approval_service is None:
+            raise RuntimeError(
+                "OrchestratorAgent received a pending_approval result but has no ApprovalService "
+                "configured to resolve it — construct it with approval_service=... to support this."
+            )
+
+        approval_id = uuid.UUID(state["pending_approval_id"])
+        decided_by_user_id = (
+            uuid.UUID(decision_payload["decided_by_user_id"])
+            if decision_payload.get("decided_by_user_id")
+            else None
+        )
+
+        if decision_payload.get("decision") == "approved":
+            approval = await self.approval_service.approve(approval_id, decided_by_user_id)
+            execution_status = (approval.execution_result or {}).get("status")
+            status = "error" if execution_status == "failed" else "completed"
+            summary = f"Approved: {approval.reason}."
+            if approval.execution_result is not None:
+                summary += f" Execution {execution_status}."
+        else:
+            approval = await self.approval_service.reject(approval_id, decided_by_user_id)
+            status = "completed"
+            summary = f"Rejected: {approval.reason}."
+
+        invocation: SpecialistInvocationState = {
+            "agent_name": state["pending_approval_agent"] or self.name,
+            "task": f"Resolve pending approval {approval_id}",
+            "result": {"status": status, "summary": summary, "data": approval.execution_result},
+            "attempt": 1,
+        }
+        return {
+            "invocations": [invocation],
+            "pending_approval_id": None,
+            "pending_approval_agent": None,
         }
 
     async def _combine_node(self, state: OrchestratorGraphState) -> dict[str, Any]:
