@@ -11,8 +11,9 @@ Rule (Constitution I, enforced by tests/unit/test_layer_boundaries.py): nothing 
 package may import sqlalchemy, app.models, or app.repositories. Agents call tools only.
 """
 
+from app.agents.analytics_agent import AnalyticsAgent
 from app.agents.customer_agent import CustomerAgent
 from app.agents.reservation_agent import ReservationAgent
 from app.agents.staffing_agent import StaffingAgent
 
-__all__ = ["ReservationAgent", "CustomerAgent", "StaffingAgent"]
+__all__ = ["ReservationAgent", "CustomerAgent", "StaffingAgent", "AnalyticsAgent"]
