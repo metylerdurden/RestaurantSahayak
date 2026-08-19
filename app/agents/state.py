@@ -1,6 +1,7 @@
-"""Typed state and result schemas for the Reservation Agent's tool-calling loop.
+"""Typed state and result schemas shared by every ToolCallingAgent (ReservationAgent,
+CustomerAgent, ...).
 
-Kept separate from reservation_agent.py so the shapes an agent communicates in are
+Kept separate from tool_calling_agent.py so the shapes an agent communicates in are
 visible without reading the control flow. Pure Pydantic models — no sqlalchemy,
 app.models, or app.repositories imports (enforced by test_layer_boundaries.py).
 """
@@ -28,9 +29,9 @@ class AgentErrorInfo(BaseModel):
 
 
 class AgentState(BaseModel):
-    """Mutable state threaded through one ReservationAgent.handle() loop, iteration
-    to iteration. Not persisted directly — AgentRunService persists an AgentMessage
-    per turn instead; this is the in-memory working state of a single run."""
+    """Mutable state threaded through one agent's handle() loop, iteration to
+    iteration. Not persisted directly — AgentRunService persists an AgentMessage per
+    turn instead; this is the in-memory working state of a single run."""
 
     task: str
     iterations: int = 0
@@ -39,11 +40,10 @@ class AgentState(BaseModel):
     error: AgentErrorInfo | None = None
 
 
-class ReservationAgentResult(BaseModel):
-    """Structured result returned to the caller of ReservationAgent.handle().
-    `data` carries the JSON-serialized payload of the last successful tool call (a
-    reservation, a list of reservations, available-table options, ...) so callers can
-    act on specifics without re-parsing `summary`."""
+class AgentResult(BaseModel):
+    """Structured result returned to the caller of any ToolCallingAgent.handle().
+    `data` carries the JSON-serialized payload of the last successful tool call so
+    callers can act on specifics without re-parsing `summary`."""
 
     agent_run_id: uuid.UUID
     status: Literal["completed", "pending_approval", "error"]
