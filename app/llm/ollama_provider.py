@@ -7,11 +7,15 @@ app.llm.factory), sourced from Settings.llm_model (env var LLM_MODEL, default
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
 
+from app.core.telemetry import get_tracer, start_span
 from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
+
+_tracer = get_tracer(__name__)
 
 
 def _message_to_payload(message: LLMMessage) -> dict[str, Any]:
@@ -63,18 +67,36 @@ class OllamaLLMProvider(LLMProvider):
             payload["tools"] = tools
         payload.update(kwargs)
 
-        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-            response = await client.post(f"{self._base_url}/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
+        with start_span(
+            _tracer, "llm.call", model_name=self._model, model_provider="ollama", has_tools=bool(tools)
+        ) as span:
+            started_at = time.monotonic()
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                    response = await client.post(f"{self._base_url}/api/chat", json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+            except Exception:
+                span.set_attribute("success", False)
+                raise
 
-        message = data.get("message", {})
-        return LLMResponse(
-            content=message.get("content", "") or "",
-            model=data.get("model", self._model),
-            tool_calls=_parse_tool_calls(message),
-            raw=data,
-        )
+            span.set_attribute("success", True)
+            span.set_attribute("latency_ms", int((time.monotonic() - started_at) * 1000))
+            # Ollama reports token counts when available (not every provider does).
+            if data.get("prompt_eval_count") is not None:
+                span.set_attribute("llm.prompt_tokens", data["prompt_eval_count"])
+            if data.get("eval_count") is not None:
+                span.set_attribute("llm.completion_tokens", data["eval_count"])
+
+            message = data.get("message", {})
+            tool_calls = _parse_tool_calls(message)
+            span.set_attribute("tool_call_count", len(tool_calls))
+            return LLMResponse(
+                content=message.get("content", "") or "",
+                model=data.get("model", self._model),
+                tool_calls=tool_calls,
+                raw=data,
+            )
 
     async def health_check(self) -> bool:
         """Fast check: Ollama is reachable and the configured model is pulled.

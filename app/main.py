@@ -7,18 +7,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 
 from app.api.routes.health import router as health_router
 from app.api.routes.workflows import router as workflows_router
 from app.core.config import get_settings
-from app.core.db import dispose_engine
+from app.core.db import dispose_engine, get_engine
 from app.core.logging import bind_correlation_id, configure_logging, get_logger
+from app.core.telemetry import configure_telemetry, instrument_fastapi, instrument_sqlalchemy
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ANN201, ARG001
     settings = get_settings()
     configure_logging(settings)
+    configure_telemetry(settings)
+    instrument_sqlalchemy(get_engine(settings))
     logger = get_logger(__name__)
     logger.info(
         "app_startup",
@@ -30,17 +34,22 @@ async def lifespan(app: FastAPI):  # noqa: ANN201, ARG001
     )
     yield
     await dispose_engine()
+    # Deliberately does NOT call shutdown_telemetry() here — see its docstring.
+    # The provider this process actually configured (if any) already registered
+    # its own atexit flush; create_app() can run more than once per process.
     logger.info("app_shutdown")
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="DineOps", version="0.1.0", lifespan=lifespan)
+    instrument_fastapi(app)
 
     @app.middleware("http")
     async def correlation_id_middleware(request: Request, call_next):  # noqa: ANN001, ANN202
         incoming = request.headers.get("X-Correlation-Id")
         correlation_id = bind_correlation_id(incoming or uuid.uuid4().hex)
+        trace.get_current_span().set_attribute("correlation_id", correlation_id)
         response = await call_next(request)
         response.headers["X-Correlation-Id"] = correlation_id
         return response

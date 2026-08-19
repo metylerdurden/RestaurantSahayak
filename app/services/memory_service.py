@@ -22,11 +22,14 @@ import uuid
 from decimal import Decimal
 from typing import Any, Literal
 
+from app.core.telemetry import get_tracer, start_span
 from app.embeddings.base import EmbeddingProvider
 from app.models import Memory
 from app.models.memory import MEMORY_SOURCES, MEMORY_TYPES
 from app.repositories.memory_repo import MemoryRepository
 from app.tools.base import ToolError
+
+_tracer = get_tracer(__name__)
 
 MemoryType = Literal[
     "CUSTOMER_PREFERENCE",
@@ -60,39 +63,57 @@ class MemoryService:
         agent_name: str | None = None,
         source_agent_run_id: uuid.UUID | None = None,
     ) -> Memory:
-        self._validate_type_and_source(memory_type, source)
-        self._validate_importance_confidence(importance, confidence)
-
-        embedding = await self._embed_one(self._embedding_text(topic, content))
-        scope_key = self._scope_key(customer_id, agent_name)
-
-        # Exact-key safety net: the same (restaurant, type, scope, topic) can only
-        # have one active memory (enforced by a DB partial unique index). If the
-        # caller re-states a fact under the same key, treat this as a correction —
-        # deactivate the stale row and persist the new content as a fresh active
-        # memory, preserving the old one as an inactive audit record rather than
-        # raising a conflict.
-        existing = await self.repo.get_active_by_scope_topic(
-            restaurant_id=restaurant_id, memory_type=memory_type, scope_key=scope_key, topic=topic
-        )
-        if existing is not None:
-            existing.is_active = False
-            await self.repo.save(existing)
-
-        return await self.repo.create(
-            restaurant_id=restaurant_id,
-            customer_id=customer_id,
-            agent_name=agent_name,
+        # Deliberately no `topic`/`content` span attributes anywhere in this module —
+        # that is customer/operational content, not an identifier, and telemetry must
+        # never carry it (see app.core.telemetry module docstring).
+        with start_span(
+            _tracer,
+            "memory.write",
+            memory_operation="add",
+            restaurant_id=str(restaurant_id),
             memory_type=memory_type,
-            topic=topic,
-            content=content,
-            embedding=embedding,
+            customer_id=str(customer_id) if customer_id else None,
+            agent_name=agent_name,
             importance=importance,
-            confidence=Decimal(str(round(confidence, 2))),
-            source=source,
-            source_agent_run_id=source_agent_run_id,
-            is_active=True,
-        )
+        ) as span:
+            self._validate_type_and_source(memory_type, source)
+            self._validate_importance_confidence(importance, confidence)
+
+            embedding = await self._embed_one(self._embedding_text(topic, content))
+            scope_key = self._scope_key(customer_id, agent_name)
+
+            # Exact-key safety net: the same (restaurant, type, scope, topic) can only
+            # have one active memory (enforced by a DB partial unique index). If the
+            # caller re-states a fact under the same key, treat this as a correction —
+            # deactivate the stale row and persist the new content as a fresh active
+            # memory, preserving the old one as an inactive audit record rather than
+            # raising a conflict.
+            existing = await self.repo.get_active_by_scope_topic(
+                restaurant_id=restaurant_id, memory_type=memory_type, scope_key=scope_key, topic=topic
+            )
+            corrected_existing = existing is not None
+            if existing is not None:
+                existing.is_active = False
+                await self.repo.save(existing)
+
+            memory = await self.repo.create(
+                restaurant_id=restaurant_id,
+                customer_id=customer_id,
+                agent_name=agent_name,
+                memory_type=memory_type,
+                topic=topic,
+                content=content,
+                embedding=embedding,
+                importance=importance,
+                confidence=Decimal(str(round(confidence, 2))),
+                source=source,
+                source_agent_run_id=source_agent_run_id,
+                is_active=True,
+            )
+            span.set_attribute("memory_id", str(memory.id))
+            span.set_attribute("corrected_existing", corrected_existing)
+            span.set_attribute("success", True)
+            return memory
 
     # --- lifecycle step 7: retrieve relevant memories ---
 
@@ -107,27 +128,42 @@ class MemoryService:
         top_k: int = 5,
         min_similarity: float = 0.0,
     ) -> list[tuple[Memory, float]]:
-        if memory_type is not None and memory_type not in MEMORY_TYPES:
-            raise ToolError("invalid_memory_type", f"Unknown memory_type: {memory_type!r}")
-
-        query_vector = await self._embed_one(query)
-        rows = await self.repo.search_by_embedding(
-            restaurant_id=restaurant_id,
-            query_vector=query_vector,
+        # No `query` text as a span attribute — it is manager/agent-composed free
+        # text that may itself reference customer specifics.
+        with start_span(
+            _tracer,
+            "memory.search",
+            memory_operation="search",
+            restaurant_id=str(restaurant_id),
             memory_type=memory_type,
-            customer_id=customer_id,
+            customer_id=str(customer_id) if customer_id else None,
             agent_name=agent_name,
-            limit=top_k,
-        )
+            top_k=top_k,
+        ) as span:
+            if memory_type is not None and memory_type not in MEMORY_TYPES:
+                raise ToolError("invalid_memory_type", f"Unknown memory_type: {memory_type!r}")
 
-        results: list[tuple[Memory, float]] = []
-        for memory, distance in rows:
-            similarity = 1.0 - distance  # BGE-M3 vectors are L2-normalized: cosine distance -> similarity
-            if similarity < min_similarity:
-                continue
-            await self.repo.touch_access(memory)
-            results.append((memory, similarity))
-        return results
+            query_vector = await self._embed_one(query)
+            rows = await self.repo.search_by_embedding(
+                restaurant_id=restaurant_id,
+                query_vector=query_vector,
+                memory_type=memory_type,
+                customer_id=customer_id,
+                agent_name=agent_name,
+                limit=top_k,
+            )
+
+            results: list[tuple[Memory, float]] = []
+            for memory, distance in rows:
+                similarity = 1.0 - distance  # BGE-M3 vectors are L2-normalized: cosine distance -> similarity
+                if similarity < min_similarity:
+                    continue
+                await self.repo.touch_access(memory)
+                results.append((memory, similarity))
+
+            span.set_attribute("result_count", len(results))
+            span.set_attribute("success", True)
+            return results
 
     async def get_memory(
         self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, touch: bool = True
@@ -149,44 +185,58 @@ class MemoryService:
         importance: int | None = None,
         confidence: float | None = None,
     ) -> Memory:
-        memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
-        if not memory.is_active:
-            raise ToolError("memory_inactive", "Cannot update a memory that has been forgotten")
+        with start_span(
+            _tracer, "memory.write", memory_operation="update", restaurant_id=str(restaurant_id),
+            memory_id=str(memory_id),
+        ) as span:
+            memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
+            if not memory.is_active:
+                raise ToolError("memory_inactive", "Cannot update a memory that has been forgotten")
 
-        if importance is not None or confidence is not None:
-            self._validate_importance_confidence(
-                importance if importance is not None else memory.importance,
-                confidence if confidence is not None else float(memory.confidence),
-            )
+            if importance is not None or confidence is not None:
+                self._validate_importance_confidence(
+                    importance if importance is not None else memory.importance,
+                    confidence if confidence is not None else float(memory.confidence),
+                )
 
-        content_or_topic_changed = content is not None or topic is not None
-        if content is not None:
-            memory.content = content
-        if topic is not None:
-            memory.topic = topic
-        if importance is not None:
-            memory.importance = importance
-        if confidence is not None:
-            memory.confidence = Decimal(str(round(confidence, 2)))
+            content_or_topic_changed = content is not None or topic is not None
+            if content is not None:
+                memory.content = content
+            if topic is not None:
+                memory.topic = topic
+            if importance is not None:
+                memory.importance = importance
+            if confidence is not None:
+                memory.confidence = Decimal(str(round(confidence, 2)))
 
-        if content_or_topic_changed:
-            memory.embedding = await self._embed_one(self._embedding_text(memory.topic, memory.content))
+            if content_or_topic_changed:
+                memory.embedding = await self._embed_one(self._embedding_text(memory.topic, memory.content))
 
-        return await self.repo.save(memory)
+            saved = await self.repo.save(memory)
+            span.set_attribute("memory_type", saved.memory_type)
+            span.set_attribute("success", True)
+            return saved
 
     # --- lifecycle step 9: reinforcement (and access tracking, shared with search/get) ---
 
     async def reinforce_memory(
         self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, confidence_step: float = 0.1
     ) -> Memory:
-        memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
-        if not memory.is_active:
-            raise ToolError("memory_inactive", "Cannot reinforce a memory that has been forgotten")
+        with start_span(
+            _tracer, "memory.write", memory_operation="reinforce", restaurant_id=str(restaurant_id),
+            memory_id=str(memory_id),
+        ) as span:
+            memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
+            if not memory.is_active:
+                raise ToolError("memory_inactive", "Cannot reinforce a memory that has been forgotten")
 
-        new_confidence = min(1.0, float(memory.confidence) + confidence_step)
-        memory.confidence = Decimal(str(round(new_confidence, 2)))
-        await self.repo.touch_access(memory)
-        return await self.repo.save(memory)
+            new_confidence = min(1.0, float(memory.confidence) + confidence_step)
+            memory.confidence = Decimal(str(round(new_confidence, 2)))
+            await self.repo.touch_access(memory)
+            saved = await self.repo.save(memory)
+            span.set_attribute("confidence", float(saved.confidence))
+            span.set_attribute("success", True)
+            return saved
 
     # --- lifecycle step 10: let low-value memories be forgotten/deleted ---
 
@@ -196,16 +246,27 @@ class MemoryService:
         """Soft delete: deactivates the memory (excluded from search/active scope) but
         keeps the row as an audit record, and frees its (type, scope, topic) key for
         a new active memory."""
-        memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
-        memory.is_active = False
-        return await self.repo.save(memory)
+        with start_span(
+            _tracer, "memory.write", memory_operation="forget", restaurant_id=str(restaurant_id),
+            memory_id=str(memory_id),
+        ) as span:
+            memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
+            memory.is_active = False
+            saved = await self.repo.save(memory)
+            span.set_attribute("success", True)
+            return saved
 
     async def delete_memory(self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID) -> None:
         """Hard delete: permanently removes the row. Use forget_memory for the normal
         "this is no longer true" case — this is for genuine removal (e.g. recorded in
         error)."""
-        memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
-        await self.repo.delete(memory)
+        with start_span(
+            _tracer, "memory.write", memory_operation="delete", restaurant_id=str(restaurant_id),
+            memory_id=str(memory_id),
+        ) as span:
+            memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
+            await self.repo.delete(memory)
+            span.set_attribute("success", True)
 
     # --- helpers ---
 

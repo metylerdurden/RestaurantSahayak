@@ -17,7 +17,33 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from opentelemetry import trace
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# One real SDK TracerProvider for the whole test session, backed by an in-memory
+# exporter instead of the app's normal console/OTLP exporter. Installed at import
+# time (before any app module runs) so app.core.telemetry.configure_telemetry() sees
+# a real provider already in place and is a no-op for every create_app()/script the
+# suite exercises — tests get every span the app would otherwise print/ship, just
+# captured for assertions instead. `set_tracer_provider` only succeeds once per
+# process, which is exactly what "one provider for the whole session" needs.
+_otel_test_exporter = InMemorySpanExporter()
+_otel_test_provider = TracerProvider(resource=Resource.create({"service.name": "dineops-test"}))
+_otel_test_provider.add_span_processor(SimpleSpanProcessor(_otel_test_exporter))
+trace.set_tracer_provider(_otel_test_provider)
+
+
+@pytest.fixture
+def otel_spans():
+    """Spans captured during this test only — cleared before and after so tests
+    never see spans left over from a previous or concurrent test."""
+    _otel_test_exporter.clear()
+    yield _otel_test_exporter
+    _otel_test_exporter.clear()
 
 
 @pytest.fixture(autouse=True)

@@ -50,13 +50,16 @@ from app.agents.orchestrator_state import (
 )
 from app.agents.prompts import ORCHESTRATOR_COMBINE_SYSTEM_PROMPT, ORCHESTRATOR_DECIDE_SYSTEM_PROMPT
 from app.agents.tool_calling_agent import ToolCallingAgent
+from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import get_tracer, start_span
 from app.llm.base import LLMMessage, LLMProvider
 from app.services.agent_run_service import AgentRunService
 from app.services.approval_service import ApprovalService
 from app.tools.base import utcnow
 
 _logger = get_logger(__name__)
+_tracer = get_tracer(__name__)
 
 SPECIALIST_DESCRIPTIONS: dict[str, str] = {
     "reservation": (
@@ -193,13 +196,29 @@ class OrchestratorAgent:
         }
         config = {"configurable": {"thread_id": str(run.id)}}
 
-        try:
-            final_state = await self._graph.ainvoke(initial_state, config=config)
-        except Exception as exc:  # the LLM/HTTP/graph boundary — never let this crash the caller
-            log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
-            return await self._finalize_error(run.id, started_at, log)
+        with start_span(
+            _tracer,
+            "orchestrator.run",
+            agent_name=self.name,
+            model_name=self.llm.model_name,
+            model_provider=get_settings().llm_provider,
+            restaurant_id=str(restaurant_id),
+            correlation_id=str(run.correlation_id),
+            trigger_type=trigger_type,
+        ) as span:
+            try:
+                final_state = await self._graph.ainvoke(initial_state, config=config)
+            except Exception as exc:  # the LLM/HTTP/graph boundary — never let this crash the caller
+                log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
+                span.set_attribute("success", False)
+                return await self._finalize_error(run.id, started_at, log)
 
-        return await self._finalize(final_state, run.id, started_at, log)
+            result = await self._finalize(final_state, run.id, started_at, log)
+            span.set_attribute("success", result.status not in ("error",))
+            span.set_attribute("status", result.status)
+            span.set_attribute("latency_ms", result.latency_ms)
+            span.set_attribute("delegation_count", len(result.invocations))
+            return result
 
     async def resume(
         self,
@@ -215,21 +234,42 @@ class OrchestratorAgent:
         log = _logger.bind(agent_run_id=str(orchestrator_run_id), agent_name=self.name)
         config = {"configurable": {"thread_id": str(orchestrator_run_id)}}
 
-        try:
-            final_state = await self._graph.ainvoke(
-                Command(
-                    resume={
-                        "decision": decision,
-                        "decided_by_user_id": str(decided_by_user_id) if decided_by_user_id else None,
-                    }
-                ),
-                config=config,
-            )
-        except Exception as exc:
-            log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
-            return await self._finalize_error(orchestrator_run_id, started_at, log)
+        # Best-effort — the paused workflow's own state (persisted by the in-memory
+        # checkpointer) already has restaurant_id/correlation_id, so pull them for
+        # span attributes rather than requiring the caller to pass them again.
+        snapshot = await self._graph.aget_state(config)
+        snapshot_values = snapshot.values if snapshot else {}
 
-        return await self._finalize(final_state, orchestrator_run_id, started_at, log)
+        with start_span(
+            _tracer,
+            "orchestrator.run",
+            agent_name=self.name,
+            model_name=self.llm.model_name,
+            model_provider=get_settings().llm_provider,
+            restaurant_id=snapshot_values.get("restaurant_id"),
+            correlation_id=snapshot_values.get("correlation_id"),
+            resumed=True,
+        ) as span:
+            try:
+                final_state = await self._graph.ainvoke(
+                    Command(
+                        resume={
+                            "decision": decision,
+                            "decided_by_user_id": str(decided_by_user_id) if decided_by_user_id else None,
+                        }
+                    ),
+                    config=config,
+                )
+            except Exception as exc:
+                log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
+                span.set_attribute("success", False)
+                return await self._finalize_error(orchestrator_run_id, started_at, log)
+
+            result = await self._finalize(final_state, orchestrator_run_id, started_at, log)
+            span.set_attribute("success", result.status not in ("error",))
+            span.set_attribute("status", result.status)
+            span.set_attribute("latency_ms", result.latency_ms)
+            return result
 
     # --- shared result-building ---
 

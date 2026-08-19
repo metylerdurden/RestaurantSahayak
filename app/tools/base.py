@@ -24,8 +24,12 @@ from typing import Any, ClassVar, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
+from app.core.telemetry import get_tracer, start_span
+
 InputT = TypeVar("InputT", bound=BaseModel)
 OutputT = TypeVar("OutputT", bound=BaseModel)
+
+_tracer = get_tracer(__name__)
 
 
 class ToolContext(BaseModel):
@@ -89,7 +93,24 @@ class Tool(ABC, Generic[InputT, OutputT]):
             if isinstance(raw_input, self.input_model)
             else self.input_model.model_validate(raw_input)
         )
-        return await self.run(validated, context=context)  # type: ignore[arg-type]
+        with start_span(
+            _tracer,
+            "tool.call",
+            tool_name=self.name,
+            agent_name=context.acting_agent,
+            restaurant_id=str(context.restaurant_id),
+            correlation_id=context.correlation_id,
+        ) as span:
+            try:
+                result = await self.run(validated, context=context)  # type: ignore[arg-type]
+            except Exception:
+                span.set_attribute("success", False)
+                raise
+            status = getattr(result, "status", None)
+            span.set_attribute("success", status != "error")
+            if status is not None:
+                span.set_attribute("status", status)
+            return result
 
     @abstractmethod
     async def run(self, input: InputT, *, context: ToolContext) -> OutputT | PendingApprovalOutput: ...

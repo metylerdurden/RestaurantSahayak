@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["console", "json"] = "console"
 
+    # --- Observability (OpenTelemetry tracing) ---
+    otel_enabled: bool = True
+    otel_service_name: str = "dineops"
+    # "console": spans print to stdout, no extra infrastructure needed (default).
+    # "otlp": spans are sent to a local collector/Jaeger, see otel_exporter_otlp_endpoint.
+    # "none": spans are created but never exported (used by the test suite, which
+    # installs its own InMemorySpanExporter-backed provider before app code runs).
+    otel_exporter: Literal["console", "otlp", "none"] = "console"
+    otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+
     # --- LLM provider (agent reasoning) ---
     llm_provider: str = "ollama"
     llm_model: str = "qwen3:8b"

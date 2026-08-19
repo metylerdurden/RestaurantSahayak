@@ -20,9 +20,10 @@ import uuid
 from sqlalchemy import select
 
 from app.api.stack import build_agent_stack
-from app.core.db import get_session_factory
+from app.core.db import get_engine, get_session_factory
 from app.core.logging import configure_logging
 from app.core.config import get_settings
+from app.core.telemetry import configure_telemetry, instrument_sqlalchemy, shutdown_telemetry
 from app.models import Restaurant
 from app.models.workflow_run import WORKFLOW_TYPES
 
@@ -58,8 +59,14 @@ def main() -> None:
     parser.add_argument("--restaurant-id", type=uuid.UUID, default=None)
     args = parser.parse_args()
 
-    configure_logging(get_settings())
-    asyncio.run(_run(args.workflow_type, args.restaurant_id))
+    settings = get_settings()
+    configure_logging(settings)
+    configure_telemetry(settings)
+    instrument_sqlalchemy(get_engine(settings))
+    try:
+        asyncio.run(_run(args.workflow_type, args.restaurant_id))
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

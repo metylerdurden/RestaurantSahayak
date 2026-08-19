@@ -21,6 +21,22 @@ have been implemented yet — that begins once the first feature spec and plan e
 - LangGraph (agent orchestration)
 - Docker / Docker Compose (local infrastructure)
 
+## Observability
+
+Every agent run, tool call, LLM call, memory operation, event, approval decision, and
+background workflow run is traced with OpenTelemetry, and every log line is tagged
+with a correlation id (`app/core/logging.py`, `app/core/telemetry.py`).
+
+By default (`OTEL_EXPORTER=console`) traces print to stdout — no extra infrastructure
+needed. To browse them in a UI instead:
+
+```
+docker compose -f docker/docker-compose.observability.yml up -d
+# then in .env: OTEL_EXPORTER=otlp, OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+Open http://localhost:16686 (Jaeger) once the app or a workflow has run.
+
 ## Workflow
 
 This repo uses [Spec Kit](https://github.com/github/spec-kit) for spec-driven

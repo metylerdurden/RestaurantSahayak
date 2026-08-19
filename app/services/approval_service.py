@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Literal
 
 from app.core.logging import get_logger
+from app.core.telemetry import get_tracer, start_span
 from app.models import Approval
 from app.models.approval import APPROVAL_DOMAINS, APPROVAL_RISK_LEVELS
 from app.repositories.approval_repo import ApprovalRepository
@@ -39,6 +40,7 @@ from app.tools.base import ToolError, utcnow
 Executor = Callable[[Approval], Awaitable[dict[str, Any]]]
 
 _logger = get_logger(__name__)
+_tracer = get_tracer(__name__)
 
 
 class ApprovalService:
@@ -89,71 +91,99 @@ class ApprovalService:
         risk_level: Literal["LOW", "MEDIUM", "HIGH"],
         expires_at: datetime | None = None,
     ) -> Approval:
-        if domain not in APPROVAL_DOMAINS:
-            raise ToolError("invalid_domain", f"Unknown approval domain: {domain!r}")
-        if risk_level not in APPROVAL_RISK_LEVELS:
-            raise ToolError("invalid_risk_level", f"Unknown risk_level: {risk_level!r}")
-        if risk_level == "LOW":
-            # LOW-risk actions (reads, recommendations, ...) never go through approval
-            # at all — a caller reaching here for one is a mismatch worth catching
-            # explicitly rather than silently creating a needless approval record.
-            raise ToolError(
-                "low_risk_does_not_require_approval",
-                "LOW-risk actions execute automatically and must not create an approval request.",
+        # No `parameters`/`reason` span attributes — those may embed operational
+        # detail (e.g. a reservation's party size or a memory-derived rationale)
+        # beyond the plain identifiers/status telemetry needs.
+        with start_span(
+            _tracer, "approval.create", domain=domain, agent_name=agent_name,
+            restaurant_id=str(restaurant_id), risk_level=risk_level,
+        ) as span:
+            if domain not in APPROVAL_DOMAINS:
+                raise ToolError("invalid_domain", f"Unknown approval domain: {domain!r}")
+            if risk_level not in APPROVAL_RISK_LEVELS:
+                raise ToolError("invalid_risk_level", f"Unknown risk_level: {risk_level!r}")
+            if risk_level == "LOW":
+                # LOW-risk actions (reads, recommendations, ...) never go through approval
+                # at all — a caller reaching here for one is a mismatch worth catching
+                # explicitly rather than silently creating a needless approval record.
+                raise ToolError(
+                    "low_risk_does_not_require_approval",
+                    "LOW-risk actions execute automatically and must not create an approval request.",
+                )
+            approval = await self.repo.create(
+                restaurant_id=restaurant_id,
+                domain=domain,
+                action=action,
+                agent_name=agent_name,
+                proposed_by_agent_run_id=proposed_by_agent_run_id,
+                parameters=parameters,
+                reason=reason,
+                risk_level=risk_level,
+                status="pending",
+                expires_at=expires_at,
             )
-        approval = await self.repo.create(
-            restaurant_id=restaurant_id,
-            domain=domain,
-            action=action,
-            agent_name=agent_name,
-            proposed_by_agent_run_id=proposed_by_agent_run_id,
-            parameters=parameters,
-            reason=reason,
-            risk_level=risk_level,
-            status="pending",
-            expires_at=expires_at,
-        )
-        await self._publish("approval.created", approval)
-        return approval
+            await self._publish("approval.created", approval)
+            span.set_attribute("approval_id", str(approval.id))
+            span.set_attribute("approval_status", approval.status)
+            span.set_attribute("success", True)
+            return approval
 
     async def get_pending_approvals(self, restaurant_id: uuid.UUID) -> list[Approval]:
         return await self.repo.list_pending(restaurant_id)
 
     async def approve(self, approval_id: uuid.UUID, decided_by_user_id: uuid.UUID) -> Approval:
-        approval = await self._require_pending(approval_id)
-        approval.status = "approved"
-        approval.decided_by_user_id = decided_by_user_id
-        approval.approved_at = utcnow()
-        approval = await self.repo.save(approval)
+        with start_span(_tracer, "approval.approve", approval_id=str(approval_id)) as span:
+            approval = await self._require_pending(approval_id)
+            approval.status = "approved"
+            approval.decided_by_user_id = decided_by_user_id
+            approval.approved_at = utcnow()
+            approval = await self.repo.save(approval)
 
-        await self._execute(approval)
-        await self._remember(approval)
-        if approval.domain == "purchase":
-            await self._publish("purchase.approved", approval)
-        await self._publish("approval.completed", approval, extra={"decision": "approved"})
-        return approval
+            await self._execute(approval)
+            await self._remember(approval)
+            if approval.domain == "purchase":
+                await self._publish("purchase.approved", approval)
+            await self._publish("approval.completed", approval, extra={"decision": "approved"})
+
+            span.set_attribute("domain", approval.domain)
+            span.set_attribute("risk_level", approval.risk_level)
+            span.set_attribute("approval_status", approval.status)
+            execution_status = (approval.execution_result or {}).get("status")
+            if execution_status is not None:
+                span.set_attribute("execution_status", execution_status)
+            span.set_attribute("success", execution_status != "failed")
+            return approval
 
     async def reject(
         self, approval_id: uuid.UUID, decided_by_user_id: uuid.UUID, reason: str | None = None
     ) -> Approval:
-        approval = await self._require_pending(approval_id)
-        approval.status = "rejected"
-        approval.decided_by_user_id = decided_by_user_id
-        approval.rejected_at = utcnow()
-        approval = await self.repo.save(approval)
+        with start_span(_tracer, "approval.reject", approval_id=str(approval_id)) as span:
+            approval = await self._require_pending(approval_id)
+            approval.status = "rejected"
+            approval.decided_by_user_id = decided_by_user_id
+            approval.rejected_at = utcnow()
+            approval = await self.repo.save(approval)
 
-        await self._remember(approval, note=reason)
-        if approval.domain == "purchase":
-            await self._publish("purchase.rejected", approval)
-        await self._publish("approval.completed", approval, extra={"decision": "rejected"})
-        return approval
+            await self._remember(approval, note=reason)
+            if approval.domain == "purchase":
+                await self._publish("purchase.rejected", approval)
+            await self._publish("approval.completed", approval, extra={"decision": "rejected"})
+
+            span.set_attribute("domain", approval.domain)
+            span.set_attribute("risk_level", approval.risk_level)
+            span.set_attribute("approval_status", approval.status)
+            span.set_attribute("success", True)
+            return approval
 
     async def expire(self, restaurant_id: uuid.UUID) -> list[Approval]:
-        overdue = await self.repo.list_overdue(restaurant_id, utcnow())
-        for approval in overdue:
-            approval.status = "expired"
-            await self.repo.save(approval)
-        return overdue
+        with start_span(_tracer, "approval.expire", restaurant_id=str(restaurant_id)) as span:
+            overdue = await self.repo.list_overdue(restaurant_id, utcnow())
+            for approval in overdue:
+                approval.status = "expired"
+                await self.repo.save(approval)
+            span.set_attribute("expired_count", len(overdue))
+            span.set_attribute("success", True)
+            return overdue
 
     # --- helpers ---
 

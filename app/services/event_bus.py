@@ -35,7 +35,10 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
+from opentelemetry.trace import Status, StatusCode
+
 from app.core.logging import get_logger
+from app.core.telemetry import get_tracer, start_span
 from app.models.event import EVENT_TYPES
 from app.repositories.event_repo import EventRepository
 from app.schemas.event import EventEnvelope
@@ -44,6 +47,7 @@ from app.tools.base import ToolError, utcnow
 EventHandler = Callable[[EventEnvelope], Awaitable[Any]]
 
 _logger = get_logger(__name__)
+_tracer = get_tracer(__name__)
 
 
 class EventBus(ABC):
@@ -102,61 +106,88 @@ class InProcessEventBus(EventBus):
         correlation_id: uuid.UUID | None = None,
         idempotency_key: str | None = None,
     ) -> EventEnvelope:
-        if event_type not in EVENT_TYPES:
-            raise ToolError("invalid_event_type", f"Unknown event_type: {event_type!r}")
+        # No `payload` as a span attribute — it's the domain event's own data
+        # (reservation details, purchase amounts, ...), not an identifier.
+        with start_span(
+            _tracer, "event.publish", event_type=event_type, restaurant_id=str(restaurant_id), published_by=published_by
+        ) as span:
+            if event_type not in EVENT_TYPES:
+                raise ToolError("invalid_event_type", f"Unknown event_type: {event_type!r}")
 
-        if idempotency_key is not None:
-            existing = await self.repo.get_by_idempotency_key(restaurant_id, idempotency_key)
-            if existing is not None:
-                _logger.info(
-                    "event_bus.duplicate_publish_skipped",
-                    event_type=event_type,
-                    idempotency_key=idempotency_key,
-                    event_id=str(existing.id),
-                )
-                return self._to_envelope(existing)
+            if idempotency_key is not None:
+                existing = await self.repo.get_by_idempotency_key(restaurant_id, idempotency_key)
+                if existing is not None:
+                    _logger.info(
+                        "event_bus.duplicate_publish_skipped",
+                        event_type=event_type,
+                        idempotency_key=idempotency_key,
+                        event_id=str(existing.id),
+                    )
+                    span.set_attribute("event_id", str(existing.id))
+                    span.set_attribute("deduplicated", True)
+                    span.set_attribute("success", True)
+                    return self._to_envelope(existing)
 
-        event = await self.repo.create(
-            event_type=event_type,
-            restaurant_id=restaurant_id,
-            entity_id=entity_id,
-            payload=payload,
-            correlation_id=correlation_id or uuid.uuid4(),
-            published_by=published_by,
-            idempotency_key=idempotency_key,
-            handled=False,
-        )
-        envelope = self._to_envelope(event)
-        log = _logger.bind(event_id=str(event.id), event_type=event_type, restaurant_id=str(restaurant_id))
-        log.info("event_bus.published")
+            event = await self.repo.create(
+                event_type=event_type,
+                restaurant_id=restaurant_id,
+                entity_id=entity_id,
+                payload=payload,
+                correlation_id=correlation_id or uuid.uuid4(),
+                published_by=published_by,
+                idempotency_key=idempotency_key,
+                handled=False,
+            )
+            envelope = self._to_envelope(event)
+            span.set_attribute("event_id", str(event.id))
+            span.set_attribute("correlation_id", str(event.correlation_id))
+            log = _logger.bind(event_id=str(event.id), event_type=event_type, restaurant_id=str(restaurant_id))
+            log.info("event_bus.published")
 
-        handler_results: dict[str, str] = {}
-        for registration in self._handlers.get(event_type, []):
-            handler_results[registration.name] = await self._dispatch_one(registration, envelope, log)
+            handler_results: dict[str, str] = {}
+            for registration in self._handlers.get(event_type, []):
+                handler_results[registration.name] = await self._dispatch_one(registration, envelope, log)
 
-        event.handled = True
-        event.handled_at = utcnow()
-        event.handler_results = handler_results or None
-        await self.repo.save(event)
+            event.handled = True
+            event.handled_at = utcnow()
+            event.handler_results = handler_results or None
+            await self.repo.save(event)
 
-        return envelope
+            span.set_attribute("handler_count", len(handler_results))
+            span.set_attribute("success", all(v == "success" for v in handler_results.values()))
+            return envelope
 
     async def _dispatch_one(self, registration: _HandlerRegistration, envelope: EventEnvelope, log: Any) -> str:
-        attempt = 0
-        last_error: Exception | None = None
-        while attempt <= self.max_retries_per_handler:
-            try:
-                await registration.handler(envelope)
-                if attempt > 0:
-                    log.info("event_bus.handler_recovered", handler=registration.name, attempt=attempt)
-                return "success"
-            except Exception as exc:  # one handler's failure must never break another's or the publisher
-                last_error = exc
-                log.warning(
-                    "event_bus.handler_failed", handler=registration.name, attempt=attempt, error=str(exc)
-                )
-                attempt += 1
-        return f"failed_after_retries: {last_error}"
+        with start_span(
+            _tracer,
+            "event.handle",
+            event_type=envelope.event_type,
+            handler=registration.name,
+            restaurant_id=str(envelope.restaurant_id),
+            correlation_id=str(envelope.correlation_id),
+        ) as span:
+            attempt = 0
+            last_error: Exception | None = None
+            while attempt <= self.max_retries_per_handler:
+                try:
+                    await registration.handler(envelope)
+                    if attempt > 0:
+                        log.info("event_bus.handler_recovered", handler=registration.name, attempt=attempt)
+                    span.set_attribute("success", True)
+                    span.set_attribute("attempts", attempt + 1)
+                    return "success"
+                except Exception as exc:  # one handler's failure must never break another's or the publisher
+                    last_error = exc
+                    log.warning(
+                        "event_bus.handler_failed", handler=registration.name, attempt=attempt, error=str(exc)
+                    )
+                    attempt += 1
+
+            span.set_attribute("success", False)
+            span.set_attribute("attempts", attempt)
+            span.record_exception(last_error)
+            span.set_status(Status(StatusCode.ERROR, str(last_error)))
+            return f"failed_after_retries: {last_error}"
 
     def _to_envelope(self, event: Any) -> EventEnvelope:
         return EventEnvelope(

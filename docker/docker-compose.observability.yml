@@ -1,0 +1,28 @@
+# Optional local trace viewer for DineOps (Step 18: Observability). Not part of the
+# default docker/docker-compose.yml stack — the app works and produces traces (to
+# stdout, via the "console" exporter) without this. Start it only when you want to
+# browse traces in a UI instead of reading them off the console.
+#
+# Usage:
+#
+#     docker compose -f docker/docker-compose.observability.yml up -d
+#
+# Then set, in your .env (see .env.example):
+#
+#     OTEL_EXPORTER=otlp
+#     OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+#
+# ...restart the API (or re-run a workflow via scripts/run_workflow.py), and open
+# http://localhost:16686 to browse traces by service ("dineops"), operation
+# (orchestrator.run, reservation_agent.run, tool.call, llm.call, memory.search,
+# memory.write, event.publish, event.handle, approval.create/approve/reject,
+# workflow.run, ...), or by tag (restaurant_id, correlation_id, agent_name, ...).
+
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Web UI
+      - "4318:4318"   # OTLP/HTTP receiver (matches OTEL_EXPORTER_OTLP_ENDPOINT)

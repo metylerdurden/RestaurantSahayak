@@ -24,12 +24,15 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from app.agents.state import AgentErrorInfo, AgentResult, AgentState, ToolCallRecord
+from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import get_tracer, start_span
 from app.llm.base import LLMMessage, LLMProvider, ToolCall as LLMToolCall
 from app.services.agent_run_service import AgentRunService
 from app.tools.base import Tool, ToolContext, ToolError, ToolErrorOutput, utcnow
 
 _logger = get_logger(__name__)
+_tracer = get_tracer(__name__)
 
 
 class ToolCallingAgent:
@@ -84,43 +87,58 @@ class ToolCallingAgent:
         log = _logger.bind(agent_run_id=str(run.id), agent_name=self.name, model=self.llm.model_name)
         log.info("agent.started", task=task)
 
-        context = ToolContext(
-            restaurant_id=restaurant_id,
+        with start_span(
+            _tracer,
+            f"{self.name}_agent.run",
+            agent_name=self.name,
+            model_name=self.llm.model_name,
+            model_provider=get_settings().llm_provider,
+            restaurant_id=str(restaurant_id),
             correlation_id=str(run.correlation_id),
-            acting_agent=self.name,
             trigger_type=trigger_type,
-            agent_run_id=run.id,
-        )
+        ) as span:
+            context = ToolContext(
+                restaurant_id=restaurant_id,
+                correlation_id=str(run.correlation_id),
+                acting_agent=self.name,
+                trigger_type=trigger_type,
+                agent_run_id=run.id,
+            )
 
-        await self.agent_run_service.log_message(run_id=run.id, role="user", content={"task": task})
+            await self.agent_run_service.log_message(run_id=run.id, role="user", content={"task": task})
 
-        state = AgentState(task=task)
-        try:
-            status = await self._run_loop(task, state, context=context, run_id=run.id, log=log)
-        except Exception as exc:  # the LLM/HTTP boundary — never let a live-model failure crash the caller
-            log.error("agent.unexpected_failure", error=str(exc), exc_info=True)
-            state.error = AgentErrorInfo(code="internal_error", message="Unexpected internal error.")
-            status = "error"
+            state = AgentState(task=task)
+            try:
+                status = await self._run_loop(task, state, context=context, run_id=run.id, log=log)
+            except Exception as exc:  # the LLM/HTTP boundary — never let a live-model failure crash the caller
+                log.error("agent.unexpected_failure", error=str(exc), exc_info=True)
+                state.error = AgentErrorInfo(code="internal_error", message="Unexpected internal error.")
+                status = "error"
 
-        latency_ms = int((time.monotonic() - started_at) * 1000)
-        summary = state.final_content or (state.error.message if state.error else "No result produced.")
+            latency_ms = int((time.monotonic() - started_at) * 1000)
+            summary = state.final_content or (state.error.message if state.error else "No result produced.")
 
-        await self.agent_run_service.complete_run(
-            run_id=run.id,
-            status="completed" if status != "error" else "failed",
-            outcome_summary=summary,
-        )
-        log.info("agent.finished", status=status, latency_ms=latency_ms, tool_calls=len(state.tool_calls))
+            await self.agent_run_service.complete_run(
+                run_id=run.id,
+                status="completed" if status != "error" else "failed",
+                outcome_summary=summary,
+            )
+            log.info("agent.finished", status=status, latency_ms=latency_ms, tool_calls=len(state.tool_calls))
 
-        return AgentResult(
-            agent_run_id=run.id,
-            status=status,
-            summary=summary,
-            tool_calls=state.tool_calls,
-            data=state.tool_calls[-1].output if state.tool_calls else None,
-            error=state.error,
-            latency_ms=latency_ms,
-        )
+            span.set_attribute("success", status != "error")
+            span.set_attribute("status", status)
+            span.set_attribute("latency_ms", latency_ms)
+            span.set_attribute("tool_call_count", len(state.tool_calls))
+
+            return AgentResult(
+                agent_run_id=run.id,
+                status=status,
+                summary=summary,
+                tool_calls=state.tool_calls,
+                data=state.tool_calls[-1].output if state.tool_calls else None,
+                error=state.error,
+                latency_ms=latency_ms,
+            )
 
     async def _run_loop(
         self,
