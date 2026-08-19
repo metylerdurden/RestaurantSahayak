@@ -78,3 +78,62 @@ async def test_health_check_false_on_connection_error(monkeypatch):
 def test_model_name_is_never_hardcoded_in_provider():
     provider = OllamaLLMProvider(model="some-other-model:latest", base_url="http://localhost:11434")
     assert provider.model_name == "some-other-model:latest"
+
+
+@pytest.mark.asyncio
+async def test_generate_sends_tools_and_parses_tool_calls_from_response(monkeypatch):
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3:8b",
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {"function": {"name": "get_customer", "arguments": {"query": "Raj"}}}
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    provider = OllamaLLMProvider(model="qwen3:8b", base_url="http://localhost:11434")
+    tool_schema = {"type": "function", "function": {"name": "get_customer", "parameters": {}}}
+    response = await provider.generate([LLMMessage(role="user", content="find Raj")], tools=[tool_schema])
+
+    assert b'"tools":[' in captured["body"]
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "get_customer"
+    assert response.tool_calls[0].arguments == {"query": "Raj"}
+    assert response.content == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_replays_assistant_tool_calls_into_history(monkeypatch):
+    from app.llm.base import ToolCall
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read()
+        return httpx.Response(200, json={"model": "qwen3:8b", "message": {"content": "done"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    provider = OllamaLLMProvider(model="qwen3:8b", base_url="http://localhost:11434")
+    history = [
+        LLMMessage(role="user", content="find Raj"),
+        LLMMessage(
+            role="assistant",
+            content="",
+            tool_calls=[ToolCall(id="call_0", name="get_customer", arguments={"query": "Raj"})],
+        ),
+        LLMMessage(role="tool", content='{"customers": []}'),
+    ]
+    await provider.generate(history)
+
+    assert b'"tool_calls":[{"function":{"name":"get_customer"' in captured["body"]

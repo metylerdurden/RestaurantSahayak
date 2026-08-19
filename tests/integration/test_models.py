@@ -59,6 +59,7 @@ async def _agent_run(session, restaurant: Restaurant, user: User) -> AgentRun:
     run = AgentRun(
         restaurant_id=restaurant.id,
         agent_name="reservation",
+        model_name="qwen3:8b",
         correlation_id=uuid.uuid4(),
         trigger_type="manager_request",
         initiated_by_user_id=user.id,
@@ -233,6 +234,7 @@ async def test_agent_run_trigger_consistency_rejects_both_null(db_session):
         AgentRun(
             restaurant_id=restaurant.id,
             agent_name="reservation",
+            model_name="qwen3:8b",
             correlation_id=uuid.uuid4(),
             trigger_type="manager_request",
             initiated_by_user_id=None,  # required for manager_request

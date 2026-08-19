@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy import select
+
+from app.models import AgentMessage, AgentRun
+from app.repositories.base import BaseRepository
+
+
+class AgentRunRepository(BaseRepository):
+    async def create(self, **fields) -> AgentRun:
+        run = AgentRun(**fields)
+        self.session.add(run)
+        await self.session.flush()
+        return run
+
+    async def get_by_id(self, run_id: uuid.UUID) -> AgentRun | None:
+        return await self.session.get(AgentRun, run_id)
+
+    async def save(self, run: AgentRun) -> AgentRun:
+        await self.session.flush()
+        return run
+
+    async def next_sequence_number(self, run_id: uuid.UUID) -> int:
+        stmt = select(AgentMessage.sequence_number).where(AgentMessage.run_id == run_id)
+        existing = (await self.session.execute(stmt)).scalars().all()
+        return (max(existing) + 1) if existing else 1
+
+    async def add_message(self, **fields) -> AgentMessage:
+        message = AgentMessage(**fields)
+        self.session.add(message)
+        await self.session.flush()
+        return message
+
+    async def list_messages(self, run_id: uuid.UUID) -> list[AgentMessage]:
+        stmt = (
+            select(AgentMessage)
+            .where(AgentMessage.run_id == run_id)
+            .order_by(AgentMessage.sequence_number)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())

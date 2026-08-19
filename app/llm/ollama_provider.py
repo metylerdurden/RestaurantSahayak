@@ -11,7 +11,28 @@ from typing import Any
 
 import httpx
 
-from app.llm.base import LLMMessage, LLMProvider, LLMResponse
+from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
+
+
+def _message_to_payload(message: LLMMessage) -> dict[str, Any]:
+    payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {"function": {"name": tc.name, "arguments": tc.arguments}} for tc in message.tool_calls
+        ]
+    return payload
+
+
+def _parse_tool_calls(message: dict[str, Any]) -> list[ToolCall]:
+    raw_calls = message.get("tool_calls") or []
+    return [
+        ToolCall(
+            id=f"call_{i}",
+            name=call.get("function", {}).get("name", ""),
+            arguments=call.get("function", {}).get("arguments", {}) or {},
+        )
+        for i, call in enumerate(raw_calls)
+    ]
 
 
 class OllamaLLMProvider(LLMProvider):
@@ -29,14 +50,17 @@ class OllamaLLMProvider(LLMProvider):
         messages: list[LLMMessage],
         *,
         temperature: float = 0.0,
+        tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [_message_to_payload(m) for m in messages],
             "stream": False,
             "options": {"temperature": temperature},
         }
+        if tools:
+            payload["tools"] = tools
         payload.update(kwargs)
 
         async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
@@ -44,9 +68,11 @@ class OllamaLLMProvider(LLMProvider):
             response.raise_for_status()
             data = response.json()
 
+        message = data.get("message", {})
         return LLMResponse(
-            content=data.get("message", {}).get("content", ""),
+            content=message.get("content", "") or "",
             model=data.get("model", self._model),
+            tool_calls=_parse_tool_calls(message),
             raw=data,
         )
 

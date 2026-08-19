@@ -38,6 +38,7 @@ class AgentRun(Base):
         UUID(as_uuid=True), ForeignKey("restaurants.id", ondelete="CASCADE"), nullable=False
     )
     agent_name: Mapped[str] = mapped_column(String, nullable=False)
+    model_name: Mapped[str] = mapped_column(String, nullable=False)
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=True
     )

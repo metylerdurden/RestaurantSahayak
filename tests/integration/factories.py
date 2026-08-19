@@ -89,10 +89,13 @@ async def make_staff(session, restaurant: Restaurant, *, role: str = "server", n
     return s
 
 
-async def make_agent_run(session, restaurant: Restaurant, user: User, *, agent_name: str = "reservation") -> AgentRun:
+async def make_agent_run(
+    session, restaurant: Restaurant, user: User, *, agent_name: str = "reservation", model_name: str = "qwen3:8b"
+) -> AgentRun:
     run = AgentRun(
         restaurant_id=restaurant.id,
         agent_name=agent_name,
+        model_name=model_name,
         correlation_id=uuid.uuid4(),
         trigger_type="manager_request",
         initiated_by_user_id=user.id,
