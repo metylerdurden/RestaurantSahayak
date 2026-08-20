@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
+from typing import List
 
 from sqlalchemy import select
 
@@ -77,7 +78,10 @@ class ReservationRepository(BaseRepository):
         party_size: int,
         requested_time: datetime,
         duration_minutes: int,
-    ) -> list[Table]:
+    ) -> List[Table]:  # typing.List, not the builtin: `list` is shadowed within this
+        # class's own body by the `list()` method defined above, once it's fully
+        # bound in the class namespace — a real (if obscure) Python scoping gotcha,
+        # not a typo.
         stmt = (
             select(Table)
             .where(

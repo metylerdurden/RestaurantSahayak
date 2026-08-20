@@ -36,7 +36,15 @@ from app.tools.inventory_tools import (
 )
 from app.tools.reservation_tools import CreateReservationTool
 from app.workflows import register_default_workflows
-from tests.integration.factories import future, make_agent_run, make_customer, make_inventory_item, make_restaurant, make_table, make_user
+from tests.integration.factories import (
+    future,
+    make_agent_run,
+    make_customer,
+    make_inventory_item,
+    make_restaurant,
+    make_table,
+    make_user,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -58,8 +66,10 @@ async def test_creating_a_reservation_triggers_a_real_inventory_agent_reaction(d
     inventory_agent = InventoryAgent(
         llm=llm,
         tools=[
-            GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-            CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=agent_run_service,
     )
@@ -69,8 +79,11 @@ async def test_creating_a_reservation_triggers_a_real_inventory_agent_reaction(d
 
     approval_service = ApprovalService(ApprovalRepository(db_session))
     reservation_service = ReservationService(
-        ReservationRepository(db_session), CustomerRepository(db_session), approval_service,
-        get_settings(), event_bus=bus,
+        ReservationRepository(db_session),
+        CustomerRepository(db_session),
+        approval_service,
+        get_settings(),
+        event_bus=bus,
     )
     restaurant = await make_restaurant(db_session)
     customer = await make_customer(db_session, restaurant)
@@ -87,18 +100,22 @@ async def test_creating_a_reservation_triggers_a_real_inventory_agent_reaction(d
         {"customer_id": str(customer.id), "party_size": 6, "requested_time": future().isoformat()}, context=context
     )
 
-    event = (
-        await db_session.execute(select(Event).where(Event.entity_id == created.reservation.id))
-    ).scalar_one()
+    event = (await db_session.execute(select(Event).where(Event.entity_id == created.reservation.id))).scalar_one()
     assert event.event_type == "reservation.created"
     assert event.handled is True
-    assert event.handler_results.get("inventory_workflow.handle_reservation_created") == "success", event.handler_results
+    assert event.handler_results.get("inventory_workflow.handle_reservation_created") == "success", (
+        event.handler_results
+    )
 
     inventory_runs = (
-        await db_session.execute(
-            select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+        (
+            await db_session.execute(
+                select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(inventory_runs) == 1
     run = inventory_runs[0]
     assert run.trigger_type == "event"

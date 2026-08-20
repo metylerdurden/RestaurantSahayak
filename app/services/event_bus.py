@@ -91,9 +91,8 @@ class InProcessEventBus(EventBus):
     def subscribe(self, event_type: str, handler: EventHandler, *, name: str | None = None) -> None:
         if event_type not in EVENT_TYPES:
             raise ToolError("invalid_event_type", f"Unknown event_type: {event_type!r}")
-        self._handlers[event_type].append(
-            _HandlerRegistration(name or getattr(handler, "__name__", "handler"), handler)
-        )
+        handler_name: str = name if name is not None else getattr(handler, "__name__", "handler")
+        self._handlers[event_type].append(_HandlerRegistration(handler_name, handler))
 
     async def publish(
         self,
@@ -178,11 +177,13 @@ class InProcessEventBus(EventBus):
                     return "success"
                 except Exception as exc:  # one handler's failure must never break another's or the publisher
                     last_error = exc
-                    log.warning(
-                        "event_bus.handler_failed", handler=registration.name, attempt=attempt, error=str(exc)
-                    )
+                    log.warning("event_bus.handler_failed", handler=registration.name, attempt=attempt, error=str(exc))
                     attempt += 1
 
+            # The loop above only exits here after at least one failing attempt
+            # (every path that doesn't fail returns "success" early) — last_error
+            # is always set by this point.
+            assert last_error is not None
             span.set_attribute("success", False)
             span.set_attribute("attempts", attempt)
             span.record_exception(last_error)

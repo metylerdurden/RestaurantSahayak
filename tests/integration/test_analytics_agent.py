@@ -61,15 +61,34 @@ async def test_item_sales_question_reflects_real_sales_data(db_session):
     baklava = await make_menu_item(db_session, restaurant, name="Baklava", price="8.00")
 
     reservation = Reservation(
-        restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=4,
-        requested_time=utcnow(), status="completed", created_via="manager_request",
+        restaurant_id=restaurant.id,
+        customer_id=customer.id,
+        table_id=table.id,
+        party_size=4,
+        requested_time=utcnow(),
+        status="completed",
+        created_via="manager_request",
     )
     db_session.add(reservation)
     await db_session.flush()
     db_session.add_all(
         [
-            Sale(restaurant_id=restaurant.id, reservation_id=reservation.id, menu_item_id=lamb.id, quantity=6, unit_price=lamb.price, sold_at=utcnow()),
-            Sale(restaurant_id=restaurant.id, reservation_id=reservation.id, menu_item_id=baklava.id, quantity=2, unit_price=baklava.price, sold_at=utcnow()),
+            Sale(
+                restaurant_id=restaurant.id,
+                reservation_id=reservation.id,
+                menu_item_id=lamb.id,
+                quantity=6,
+                unit_price=lamb.price,
+                sold_at=utcnow(),
+            ),
+            Sale(
+                restaurant_id=restaurant.id,
+                reservation_id=reservation.id,
+                menu_item_id=baklava.id,
+                quantity=2,
+                unit_price=baklava.price,
+                sold_at=utcnow(),
+            ),
         ]
     )
     await db_session.flush()
@@ -77,8 +96,11 @@ async def test_item_sales_question_reflects_real_sales_data(db_session):
     today = _today().isoformat()
     responses = [
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c0", name="get_item_sales", arguments={"date_from": today, "date_to": today, "limit": 5})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(id="c0", name="get_item_sales", arguments={"date_from": today, "date_to": today, "limit": 5})
+            ],
         ),
         LLMResponse(content="Lamb Souvlaki was the best seller today.", model="fake-model"),
     ]
@@ -105,29 +127,52 @@ async def test_revenue_comparison_question_reflects_two_real_days(db_session):
     yesterday = today - timedelta(days=1)
     for day, quantity in [(today, 2), (yesterday, 10)]:
         reservation = Reservation(
-            restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=2,
-            requested_time=utcnow().replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=(today - day).days),
-            status="completed", created_via="manager_request",
+            restaurant_id=restaurant.id,
+            customer_id=customer.id,
+            table_id=table.id,
+            party_size=2,
+            requested_time=utcnow().replace(hour=12, minute=0, second=0, microsecond=0)
+            - timedelta(days=(today - day).days),
+            status="completed",
+            created_via="manager_request",
         )
         db_session.add(reservation)
         await db_session.flush()
         db_session.add(
             Sale(
-                restaurant_id=restaurant.id, reservation_id=reservation.id, menu_item_id=item.id,
-                quantity=quantity, unit_price=item.price,
-                sold_at=utcnow().replace(hour=12, minute=0, second=0, microsecond=0) - timedelta(days=(today - day).days),
+                restaurant_id=restaurant.id,
+                reservation_id=reservation.id,
+                menu_item_id=item.id,
+                quantity=quantity,
+                unit_price=item.price,
+                sold_at=utcnow().replace(hour=12, minute=0, second=0, microsecond=0)
+                - timedelta(days=(today - day).days),
             )
         )
     await db_session.flush()
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c0", name="get_daily_sales", arguments={"date_from": today.isoformat(), "date_to": today.isoformat()})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c0",
+                    name="get_daily_sales",
+                    arguments={"date_from": today.isoformat(), "date_to": today.isoformat()},
+                )
+            ],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c1", name="get_daily_sales", arguments={"date_from": yesterday.isoformat(), "date_to": yesterday.isoformat()})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="get_daily_sales",
+                    arguments={"date_from": yesterday.isoformat(), "date_to": yesterday.isoformat()},
+                )
+            ],
         ),
         LLMResponse(content="Revenue today ($60.00) is well below yesterday's ($300.00).", model="fake-model"),
     ]
@@ -153,8 +198,13 @@ async def test_no_show_rate_question_reflects_real_reservation_outcomes(db_sessi
     for status in ("completed", "completed", "completed", "no_show"):
         db_session.add(
             Reservation(
-                restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=2,
-                requested_time=utcnow(), status=status, created_via="manager_request",
+                restaurant_id=restaurant.id,
+                customer_id=customer.id,
+                table_id=table.id,
+                party_size=2,
+                requested_time=utcnow(),
+                status=status,
+                created_via="manager_request",
             )
         )
     await db_session.flush()
@@ -162,7 +212,8 @@ async def test_no_show_rate_question_reflects_real_reservation_outcomes(db_sessi
     today = _today().isoformat()
     responses = [
         LLMResponse(
-            content="", model="fake-model",
+            content="",
+            model="fake-model",
             tool_calls=[ToolCall(id="c0", name="get_no_show_rate", arguments={"date_from": today, "date_to": today})],
         ),
         LLMResponse(content="The no-show rate today is 25% (1 of 4).", model="fake-model"),

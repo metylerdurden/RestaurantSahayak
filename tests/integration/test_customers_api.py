@@ -46,9 +46,7 @@ async def test_get_customer_by_id(client, db_session):
 async def test_get_unknown_customer_returns_404(client, db_session):
     restaurant = await make_restaurant(db_session)
 
-    response = await client.get(
-        f"/api/v1/customers/00000000-0000-0000-0000-000000000000?restaurant_id={restaurant.id}"
-    )
+    response = await client.get(f"/api/v1/customers/00000000-0000-0000-0000-000000000000?restaurant_id={restaurant.id}")
 
     assert response.status_code == 404
 

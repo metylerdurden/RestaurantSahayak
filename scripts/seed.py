@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete
@@ -27,14 +26,14 @@ from app.embeddings.factory import get_embedding_provider
 from app.models import (
     Customer,
     InventoryItem,
-    MenuItem,
     Memory,
+    MenuItem,
     Reservation,
     Restaurant,
     Sale,
+    ShiftAssignment,
     Staff,
     StaffShift,
-    ShiftAssignment,
     Table,
     User,
 )
@@ -45,8 +44,20 @@ RNG = random.Random(20260819)
 async def _clear_existing(session: AsyncSession) -> None:
     """Delete in reverse-dependency order. Approval/Event/AgentRun/AgentMessage are
     intentionally left untouched — they're runtime-generated, not reseeded here."""
-    for model in [Sale, Memory, ShiftAssignment, StaffShift, Reservation, Staff,
-                  MenuItem, InventoryItem, Table, Customer, User, Restaurant]:
+    for model in [
+        Sale,
+        Memory,
+        ShiftAssignment,
+        StaffShift,
+        Reservation,
+        Staff,
+        MenuItem,
+        InventoryItem,
+        Table,
+        Customer,
+        User,
+        Restaurant,
+    ]:
         await session.execute(delete(model))
     await session.commit()
 
@@ -78,8 +89,14 @@ async def _seed_user(session: AsyncSession, restaurant: Restaurant) -> User:
 
 async def _seed_tables(session: AsyncSession, restaurant: Restaurant) -> list[Table]:
     layout = [
-        ("T1", 2), ("T2", 2), ("T3", 4), ("T4", 4),
-        ("T5", 4), ("T6", 6), ("T7", 6), ("T8", 8),
+        ("T1", 2),
+        ("T2", 2),
+        ("T3", 4),
+        ("T4", 4),
+        ("T5", 4),
+        ("T6", 6),
+        ("T7", 6),
+        ("T8", 8),
     ]
     tables = [Table(restaurant_id=restaurant.id, label=label, seat_capacity=cap) for label, cap in layout]
     session.add_all(tables)
@@ -126,10 +143,10 @@ async def _seed_inventory(session: AsyncSession, restaurant: Restaurant) -> list
         ("All-Purpose Flour", "kg", 20.0, 5.0),
         ("Lemons", "each", 60.0, 20.0),
         ("House Red Wine", "bottle", 24.0, 6.0),
-        ("House White Wine", "bottle", 3.0, 6.0),   # seeded LOW on purpose
+        ("House White Wine", "bottle", 3.0, 6.0),  # seeded LOW on purpose
         ("Unsalted Butter", "kg", 5.0, 2.0),
         ("Garlic", "kg", 3.0, 1.0),
-        ("Fresh Basil", "kg", 0.0, 1.0),             # seeded OUT OF STOCK on purpose
+        ("Fresh Basil", "kg", 0.0, 1.0),  # seeded OUT OF STOCK on purpose
     ]
     inventory_items = []
     for name, unit, qty, threshold in stock:
@@ -151,9 +168,11 @@ async def _seed_inventory(session: AsyncSession, restaurant: Restaurant) -> list
 
 async def _seed_staff(session: AsyncSession, restaurant: Restaurant) -> list[Staff]:
     roster = [
-        ("Alex Rivera", "server"), ("Priya Nair", "server"),
+        ("Alex Rivera", "server"),
+        ("Priya Nair", "server"),
         ("Sam Okafor", "host"),
-        ("Marco Bellini", "cook"), ("Dana Kim", "cook"),
+        ("Marco Bellini", "cook"),
+        ("Dana Kim", "cook"),
         ("Theo Marsh", "bartender"),
     ]
     staff = [Staff(restaurant_id=restaurant.id, name=name, role=role) for name, role in roster]
@@ -162,9 +181,7 @@ async def _seed_staff(session: AsyncSession, restaurant: Restaurant) -> list[Sta
     return staff
 
 
-async def _seed_shifts_and_assignments(
-    session: AsyncSession, restaurant: Restaurant, staff: list[Staff]
-) -> None:
+async def _seed_shifts_and_assignments(session: AsyncSession, restaurant: Restaurant, staff: list[Staff]) -> None:
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     servers = [s for s in staff if s.role == "server"]
     cooks = [s for s in staff if s.role == "cook"]
@@ -271,7 +288,7 @@ async def _seed_reservations_and_sales(
     # Upcoming reservations: routine bookings plus one large party (>= high-impact
     # threshold) so the approval-gated cancellation path has a ready fixture.
     upcoming_specs = [
-        (customers[4], tables[7], 8, 1, 19, "booked"),   # large party — future approval-gated test fixture
+        (customers[4], tables[7], 8, 1, 19, "booked"),  # large party — future approval-gated test fixture
         (customers[5], tables[2], 4, 1, 20, "booked"),
         (customers[7], tables[1], 2, 2, 18, "requested"),
         (customers[8], tables[4], 4, 3, 19, "booked"),
@@ -299,34 +316,56 @@ async def _seed_memories(session: AsyncSession, restaurant: Restaurant, customer
 
     memory_specs = [
         (
-            customers[0], "CUSTOMER_PREFERENCE", "seating_preference",
+            customers[0],
+            "CUSTOMER_PREFERENCE",
+            "seating_preference",
             {"text": "The Patels always request a window table, away from the kitchen."},
-            "manager_stated", 4, 1.00,
+            "manager_stated",
+            4,
+            1.00,
         ),
         (
-            customers[0], "CUSTOMER_PREFERENCE", "dietary_note",
+            customers[0],
+            "CUSTOMER_PREFERENCE",
+            "dietary_note",
             {"text": "One member of the Patel party has a shellfish allergy."},
-            "manager_stated", 5, 1.00,
+            "manager_stated",
+            5,
+            1.00,
         ),
         (
-            customers[2], "CUSTOMER_PREFERENCE", "occasion",
+            customers[2],
+            "CUSTOMER_PREFERENCE",
+            "occasion",
             {"text": "David Chen usually books for work dinners and prefers a quiet corner table."},
-            "agent_inferred", 3, 0.75,
+            "agent_inferred",
+            3,
+            0.75,
         ),
-        (None, "BUSINESS_RULE", "cancellation_policy",
-         {"text": "Parties of 6 or more require 24 hours notice to cancel without a fee."},
-         "manager_stated", 5, 1.00),
-        (None, "OPERATIONAL_FACT", "peak_hours",
-         {"text": "Friday and Saturday 7-9pm are consistently the busiest dinner service hours."},
-         "system_derived", 3, 0.90),
+        (
+            None,
+            "BUSINESS_RULE",
+            "cancellation_policy",
+            {"text": "Parties of 6 or more require 24 hours notice to cancel without a fee."},
+            "manager_stated",
+            5,
+            1.00,
+        ),
+        (
+            None,
+            "OPERATIONAL_FACT",
+            "peak_hours",
+            {"text": "Friday and Saturday 7-9pm are consistently the busiest dinner service hours."},
+            "system_derived",
+            3,
+            0.90,
+        ),
     ]
 
     contents_to_embed = [spec[3]["text"] for spec in memory_specs]
     vectors = embedder.embed(contents_to_embed)
 
-    for (customer, memory_type, topic, content, source, importance, confidence), vector in zip(
-        memory_specs, vectors
-    ):
+    for (customer, memory_type, topic, content, source, importance, confidence), vector in zip(memory_specs, vectors):
         session.add(
             Memory(
                 restaurant_id=restaurant.id,

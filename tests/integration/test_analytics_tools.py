@@ -9,8 +9,8 @@ import pytest
 from app.models import Reservation, Sale
 from app.repositories.analytics_repo import AnalyticsRepository
 from app.services.analytics_service import AnalyticsService
-from app.tools.base import ToolContext, utcnow
 from app.tools.analytics_tools import GetDailySalesTool, GetItemSalesTool, GetNoShowRateTool
+from app.tools.base import ToolContext, utcnow
 from tests.integration.factories import make_customer, make_menu_item, make_restaurant, make_table
 
 pytestmark = pytest.mark.asyncio
@@ -119,7 +119,5 @@ async def test_get_no_show_rate_returns_none_with_no_data(db_session):
     context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="analytics")
     future_date = (_today() + timedelta(days=365)).isoformat()
 
-    output = await GetNoShowRateTool(service)(
-        {"date_from": future_date, "date_to": future_date}, context=context
-    )
+    output = await GetNoShowRateTool(service)({"date_from": future_date, "date_to": future_date}, context=context)
     assert output.no_show_rate is None

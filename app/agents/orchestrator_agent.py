@@ -32,23 +32,27 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Literal
-
-from pydantic import ValidationError
+from typing import Any, Literal, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from pydantic import ValidationError
 
 from app.agents.orchestrator_state import (
     DelegateDecision,
     FinishDecision,
     OrchestratorGraphState,
     OrchestratorResult,
+    RequiredDomainsDecision,
     SpecialistInvocationRecord,
     SpecialistInvocationState,
 )
-from app.agents.prompts import ORCHESTRATOR_COMBINE_SYSTEM_PROMPT, ORCHESTRATOR_DECIDE_SYSTEM_PROMPT
+from app.agents.prompts import (
+    ORCHESTRATOR_COMBINE_SYSTEM_PROMPT,
+    ORCHESTRATOR_DECIDE_SYSTEM_PROMPT,
+    ORCHESTRATOR_SCOPE_SYSTEM_PROMPT,
+)
 from app.agents.tool_calling_agent import ToolCallingAgent
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -56,15 +60,14 @@ from app.core.telemetry import get_tracer, start_span
 from app.llm.base import LLMMessage, LLMProvider
 from app.services.agent_run_service import AgentRunService
 from app.services.approval_service import ApprovalService
-from app.tools.base import utcnow
+from app.tools.base import ToolError, utcnow
 
 _logger = get_logger(__name__)
 _tracer = get_tracer(__name__)
 
 SPECIALIST_DESCRIPTIONS: dict[str, str] = {
     "reservation": (
-        "Table reservations — finding availability, creating, modifying, "
-        "cancelling, and listing reservations."
+        "Table reservations — finding availability, creating, modifying, cancelling, and listing reservations."
     ),
     "customer": (
         "Customer identity and persistent memory — looking up customers and their "
@@ -112,6 +115,27 @@ _FINISH_SCHEMA = {
     },
 }
 
+_REQUIRED_DOMAINS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "identify_required_domains",
+        "description": "Declare which specialist domains are essential to answer this request completely.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "domains": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["reservation", "customer", "inventory", "staffing", "analytics"],
+                    },
+                },
+            },
+            "required": ["domains"],
+        },
+    },
+}
+
 
 class OrchestratorAgent:
     name = "orchestrator"
@@ -134,10 +158,10 @@ class OrchestratorAgent:
         self.max_retries_per_agent = max_retries_per_agent
 
         listing = "\n".join(
-            f"- {name}: {SPECIALIST_DESCRIPTIONS.get(name, 'no description available')}"
-            for name in specialists
+            f"- {name}: {SPECIALIST_DESCRIPTIONS.get(name, 'no description available')}" for name in specialists
         )
         self._decide_system_prompt = ORCHESTRATOR_DECIDE_SYSTEM_PROMPT.format(specialists_listing=listing)
+        self._scope_system_prompt = ORCHESTRATOR_SCOPE_SYSTEM_PROMPT.format(specialists_listing=listing)
         # In-memory checkpointer: state for a paused workflow lives only in this
         # OrchestratorAgent instance/process for now — the same simplification every
         # other subsystem here makes (e.g. the LLM/embedding providers are also
@@ -185,6 +209,7 @@ class OrchestratorAgent:
             "orchestrator_run_id": str(run.id),
             "correlation_id": str(run.correlation_id),
             "invocations": [],
+            "required_domains": [],
             "remaining_steps": self.max_delegations,
             "next_agent": None,
             "next_instruction": None,
@@ -273,6 +298,28 @@ class OrchestratorAgent:
 
     # --- shared result-building ---
 
+    async def _record_message(self, *, run_id: uuid.UUID, content: dict[str, Any], log: Any) -> None:
+        """Best-effort: persisting a trace message must never stop handle()/resume()
+        from returning a result to the caller — e.g. if the database connection
+        was lost partway through, the OrchestratorResult already built in memory
+        is still correct and should still reach the caller."""
+        try:
+            await self.agent_run_service.log_message(run_id=run_id, role="assistant", content=content)
+        except Exception as exc:
+            log.error("orchestrator.message_recording_failed", error=str(exc), exc_info=True)
+
+    async def _record_completion(
+        self, *, run_id: uuid.UUID, status: Literal["completed", "failed"], summary: str, log: Any
+    ) -> None:
+        """Same rationale as _record_message — this is the terminal-state write,
+        so it matters even more that a failure here degrades gracefully (the run's
+        AgentRun row stays "running" forever, a known gap, rather than the caller
+        never getting an answer at all)."""
+        try:
+            await self.agent_run_service.complete_run(run_id=run_id, status=status, outcome_summary=summary)
+        except Exception as exc:
+            log.error("orchestrator.completion_recording_failed", error=str(exc), exc_info=True)
+
     async def _finalize(
         self, final_state: dict[str, Any], run_id: uuid.UUID, started_at: float, log: Any
     ) -> OrchestratorResult:
@@ -296,9 +343,7 @@ class OrchestratorAgent:
                 f"(approval_id={payload.get('approval_id')}) before continuing."
             )
             log.info("orchestrator.paused_for_approval", approval_id=payload.get("approval_id"))
-            await self.agent_run_service.log_message(
-                run_id=run_id, role="assistant", content={"pending_approval": payload}
-            )
+            await self._record_message(run_id=run_id, content={"pending_approval": payload}, log=log)
             # Deliberately does NOT call complete_run() — the AgentRun stays
             # "running" because the workflow itself is still in progress, just
             # paused, not finished.
@@ -313,8 +358,8 @@ class OrchestratorAgent:
             )
 
         summary = final_state.get("final_response") or "Done."
-        await self.agent_run_service.log_message(run_id=run_id, role="assistant", content={"content": summary})
-        await self.agent_run_service.complete_run(run_id=run_id, status="completed", outcome_summary=summary)
+        await self._record_message(run_id=run_id, content={"content": summary}, log=log)
+        await self._record_completion(run_id=run_id, status="completed", summary=summary, log=log)
         log.info("orchestrator.finished", status="completed", latency_ms=latency_ms, delegations=len(invocations))
 
         return OrchestratorResult(
@@ -329,7 +374,7 @@ class OrchestratorAgent:
     async def _finalize_error(self, run_id: uuid.UUID, started_at: float, log: Any) -> OrchestratorResult:
         summary = "The orchestrator hit an unexpected internal error and could not complete the request."
         latency_ms = int((time.monotonic() - started_at) * 1000)
-        await self.agent_run_service.complete_run(run_id=run_id, status="failed", outcome_summary=summary)
+        await self._record_completion(run_id=run_id, status="failed", summary=summary, log=log)
         log.info("orchestrator.finished", status="error", latency_ms=latency_ms, delegations=0)
         return OrchestratorResult(
             orchestrator_run_id=run_id,
@@ -344,14 +389,14 @@ class OrchestratorAgent:
 
     def _build_graph(self):
         graph = StateGraph(OrchestratorGraphState)
+        graph.add_node("identify_scope", self._identify_scope_node)
         graph.add_node("decide", self._decide_node)
         graph.add_node("delegate", self._delegate_node)
         graph.add_node("await_approval", self._await_approval_node)
         graph.add_node("combine", self._combine_node)
-        graph.add_edge(START, "decide")
-        graph.add_conditional_edges(
-            "decide", self._route_after_decide, {"delegate": "delegate", "combine": "combine"}
-        )
+        graph.add_edge(START, "identify_scope")
+        graph.add_edge("identify_scope", "decide")
+        graph.add_conditional_edges("decide", self._route_after_decide, {"delegate": "delegate", "combine": "combine"})
         graph.add_conditional_edges(
             "delegate",
             self._route_after_delegate,
@@ -371,24 +416,76 @@ class OrchestratorAgent:
 
     # --- nodes ---
 
+    async def _identify_scope_node(self, state: OrchestratorGraphState) -> dict[str, Any]:
+        """Runs once, before any delegation. Asks the model which specialist
+        domains are essential for this specific request — genuine LLM reasoning,
+        captured up front rather than re-judged turn by turn. _decide_node then
+        treats the result as a completeness floor it enforces deterministically:
+        see its own docstring for why a purely per-turn "do I have enough now?"
+        judgment (the previous design) proved unreliable for broad questions."""
+        messages = [
+            LLMMessage(role="system", content=self._scope_system_prompt),
+            LLMMessage(role="user", content=f"Manager's request: {state['task']}"),
+        ]
+        response = await self.llm.generate(messages, tools=[_REQUIRED_DOMAINS_SCHEMA], think=False)
+
+        required: list[str] = []
+        if response.tool_calls and response.tool_calls[0].name == "identify_required_domains":
+            try:
+                decision = RequiredDomainsDecision.model_validate(response.tool_calls[0].arguments)
+                required = [d for d in decision.domains if d in self.specialists]
+            except ValidationError:
+                required = []
+        return {"required_domains": required}
+
+    def _missing_required_domains(self, state: OrchestratorGraphState) -> list[str]:
+        covered = {inv["agent_name"] for inv in state["invocations"]}
+        return [d for d in state.get("required_domains", []) if d not in covered]
+
+    def _force_delegate(self, agent_name: str, state: OrchestratorGraphState) -> dict[str, Any]:
+        """The deterministic completeness guarantee: a domain _identify_scope_node
+        marked essential gets delegated to even if the decide call tries to finish
+        (or answers malformed) before covering it. The specialist itself still does
+        all the real reasoning/tool-calling — only the routing decision "must this
+        domain be checked at all" is enforced here rather than left purely to a
+        per-turn model judgment, which this project's own history has shown is not
+        reliable enough for broad readiness-style questions on its own."""
+        return {
+            "next_agent": agent_name,
+            "next_instruction": (
+                f'As part of fully answering the manager\'s request — "{state["task"]}" — '
+                f"report the current {agent_name} status relevant to it."
+            ),
+            "finished": False,
+        }
+
     async def _decide_node(self, state: OrchestratorGraphState) -> dict[str, Any]:
+        missing_required = self._missing_required_domains(state)
+
         if state["remaining_steps"] <= 0:
+            # Bounded budget wins even over an unmet requirement — this is a safety
+            # valve (max_delegations), never expected to bind in practice since
+            # required_domains is normally 1-3 entries well within budget.
             return {"next_agent": None, "next_instruction": None, "finished": True}
 
         progress_lines = [
             f'- {inv["agent_name"]} (asked: "{inv["task"]}") -> '
-            f'status={inv["result"].get("status")}: {inv["result"].get("summary")}'
+            f"status={inv['result'].get('status')}: {inv['result'].get('summary')}"
             for inv in state["invocations"]
         ]
         progress_text = "\n".join(progress_lines) if progress_lines else "(nothing delegated yet)"
 
-        system_content = (
-            f"{self._decide_system_prompt}\n\n"
-            f"The current date and time (UTC) is {utcnow().isoformat()}."
+        system_content = f"{self._decide_system_prompt}\n\nThe current date and time (UTC) is {utcnow().isoformat()}."
+        requirement_note = (
+            f"\n\nYou still MUST delegate to each of these domains before you may call "
+            f"finish(): {', '.join(missing_required)}. Choose one of them now.\n"
+            if missing_required
+            else ""
         )
         user_content = (
             f"Manager's request: {state['task']}\n\n"
-            f"Progress so far:\n{progress_text}\n\n"
+            f"Progress so far:\n{progress_text}\n"
+            f"{requirement_note}\n"
             "Call delegate(agent_name, instruction) for the next specialist needed, "
             "or finish() if you already have enough to answer."
         )
@@ -400,12 +497,16 @@ class OrchestratorAgent:
         response = await self.llm.generate(messages, tools=[_DELEGATE_SCHEMA, _FINISH_SCHEMA], think=False)
 
         if not response.tool_calls:
-            # answered in plain text instead of calling a routing function — nothing
-            # more to delegate to, so treat this as done.
+            # answered in plain text instead of calling a routing function.
+            if missing_required:
+                return self._force_delegate(missing_required[0], state)
             return {"next_agent": None, "next_instruction": None, "finished": True}
 
         call = response.tool_calls[0]
         if call.name == "finish":
+            # Deterministic completeness guarantee — see _force_delegate.
+            if missing_required:
+                return self._force_delegate(missing_required[0], state)
             try:
                 FinishDecision.model_validate(call.arguments)
             except ValidationError:
@@ -416,9 +517,15 @@ class OrchestratorAgent:
             try:
                 decision = DelegateDecision.model_validate(call.arguments)
             except ValidationError:
-                # malformed routing call — don't loop forever on bad model output
+                # malformed routing call — force the requirement if one is
+                # outstanding rather than giving up; otherwise don't loop forever
+                # on bad model output.
+                if missing_required:
+                    return self._force_delegate(missing_required[0], state)
                 return {"next_agent": None, "next_instruction": None, "finished": True}
             if decision.agent_name not in self.specialists:
+                if missing_required:
+                    return self._force_delegate(missing_required[0], state)
                 return {"next_agent": None, "next_instruction": None, "finished": True}
             return {
                 "next_agent": decision.agent_name,
@@ -426,6 +533,8 @@ class OrchestratorAgent:
                 "finished": False,
             }
 
+        if missing_required:
+            return self._force_delegate(missing_required[0], state)
         return {"next_agent": None, "next_instruction": None, "finished": True}
 
     async def _delegate_node(self, state: OrchestratorGraphState) -> dict[str, Any]:
@@ -437,18 +546,17 @@ class OrchestratorAgent:
         restaurant_id = uuid.UUID(state["restaurant_id"])
         orchestrator_run_id = uuid.UUID(state["orchestrator_run_id"])
         correlation_id = uuid.UUID(state["correlation_id"])
-        initiated_by_user_id = (
-            uuid.UUID(state["initiated_by_user_id"]) if state["initiated_by_user_id"] else None
-        )
-        triggering_event_id = (
-            uuid.UUID(state["triggering_event_id"]) if state["triggering_event_id"] else None
-        )
+        initiated_by_user_id = uuid.UUID(state["initiated_by_user_id"]) if state["initiated_by_user_id"] else None
+        triggering_event_id = uuid.UUID(state["triggering_event_id"]) if state["triggering_event_id"] else None
 
         async def _call() -> Any:
             return await specialist.handle(
                 instruction,
                 restaurant_id=restaurant_id,
-                trigger_type=state["trigger_type"],
+                # OrchestratorGraphState stores trigger_type as plain str (LangGraph
+                # state favors simple JSON-serializable types) — it's always one of
+                # the 3 literals handle() itself put there when building initial_state.
+                trigger_type=cast(Literal["manager_request", "event", "scheduled"], state["trigger_type"]),
                 initiated_by_user_id=initiated_by_user_id,
                 triggering_event_id=triggering_event_id,
                 parent_run_id=orchestrator_run_id,
@@ -504,10 +612,17 @@ class OrchestratorAgent:
 
         approval_id = uuid.UUID(state["pending_approval_id"])
         decided_by_user_id = (
-            uuid.UUID(decision_payload["decided_by_user_id"])
-            if decision_payload.get("decided_by_user_id")
-            else None
+            uuid.UUID(decision_payload["decided_by_user_id"]) if decision_payload.get("decided_by_user_id") else None
         )
+
+        # ApprovalService.approve()/reject() require a real deciding user — matches
+        # the Manager API's own requirement (app.api.routes.approvals) that every
+        # decision is attributable to someone, never silently anonymous.
+        if decided_by_user_id is None:
+            raise ToolError(
+                "decided_by_user_id_required",
+                "Resuming a paused orchestrator run requires decided_by_user_id.",
+            )
 
         if decision_payload.get("decision") == "approved":
             approval = await self.approval_service.approve(approval_id, decided_by_user_id)
@@ -539,7 +654,7 @@ class OrchestratorAgent:
 
         blocks = [
             f'{inv["agent_name"]} was asked: "{inv["task"]}"\n'
-            f'Result (status={inv["result"].get("status")}): {inv["result"].get("summary")}'
+            f"Result (status={inv['result'].get('status')}): {inv['result'].get('summary')}"
             for inv in state["invocations"]
         ]
         invocations_text = "\n\n".join(blocks)

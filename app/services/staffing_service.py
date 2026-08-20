@@ -15,7 +15,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from app.core.config import Settings
-from app.models import Staff, StaffShift, ShiftAssignment
+from app.models import ShiftAssignment, Staff, StaffShift
 from app.repositories.staffing_repo import StaffingRepository
 
 
@@ -45,9 +45,7 @@ class StaffingService:
         role: str | None,
     ) -> list[Staff]:
         all_staff = await self.repo.list_active_staff(restaurant_id, role=role)
-        assigned_ids = await self.repo.list_assigned_staff_ids_in_window(
-            restaurant_id, start_at, end_at
-        )
+        assigned_ids = await self.repo.list_assigned_staff_ids_in_window(restaurant_id, start_at, end_at)
         return [s for s in all_staff if s.id not in assigned_ids]
 
     async def calculate_staff_requirement(

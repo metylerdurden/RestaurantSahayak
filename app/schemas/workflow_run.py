@@ -6,9 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-WorkflowType = Literal[
-    "daily_briefing", "inventory_monitoring", "reservation_monitoring", "staffing_monitoring"
-]
+WorkflowType = Literal["daily_briefing", "inventory_monitoring", "reservation_monitoring", "staffing_monitoring"]
 
 
 class WorkflowRunDTO(BaseModel):

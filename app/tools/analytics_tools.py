@@ -52,10 +52,7 @@ class GetItemSalesTool(Tool[GetItemSalesInput, GetItemSalesOutput]):
 
 class GetNoShowRateTool(Tool[GetNoShowRateInput, GetNoShowRateOutput]):
     name = "get_no_show_rate"
-    description = (
-        "Get the no-show rate (no-shows as a fraction of no-shows + completed visits) "
-        "over a date range."
-    )
+    description = "Get the no-show rate (no-shows as a fraction of no-shows + completed visits) over a date range."
     input_model = GetNoShowRateInput
     output_model = GetNoShowRateOutput
 

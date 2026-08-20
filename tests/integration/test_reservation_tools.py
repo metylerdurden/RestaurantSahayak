@@ -4,8 +4,6 @@ round trip for cancel_reservation."""
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 
 from app.repositories.approval_repo import ApprovalRepository
@@ -21,7 +19,7 @@ from app.tools.reservation_tools import (
     GetReservationsTool,
     ModifyReservationTool,
 )
-from tests.integration.factories import make_agent_run, make_customer, make_restaurant, make_table, make_user, future
+from tests.integration.factories import future, make_agent_run, make_customer, make_restaurant, make_table, make_user
 
 pytestmark = pytest.mark.asyncio
 

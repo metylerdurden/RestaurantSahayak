@@ -43,9 +43,7 @@ async def test_approve_marks_approved_and_removes_it_from_pending(client, db_ses
     run = await make_agent_run(db_session, restaurant, user)
     approval = await make_approval(db_session, restaurant, run)
 
-    response = await client.post(
-        f"/api/v1/approvals/{approval.id}/approve", json={"decided_by_user_id": str(user.id)}
-    )
+    response = await client.post(f"/api/v1/approvals/{approval.id}/approve", json={"decided_by_user_id": str(user.id)})
 
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
@@ -75,12 +73,8 @@ async def test_deciding_an_already_decided_approval_returns_409(client, db_sessi
     run = await make_agent_run(db_session, restaurant, user)
     approval = await make_approval(db_session, restaurant, run)
 
-    first = await client.post(
-        f"/api/v1/approvals/{approval.id}/approve", json={"decided_by_user_id": str(user.id)}
-    )
+    first = await client.post(f"/api/v1/approvals/{approval.id}/approve", json={"decided_by_user_id": str(user.id)})
     assert first.status_code == 200
 
-    second = await client.post(
-        f"/api/v1/approvals/{approval.id}/reject", json={"decided_by_user_id": str(user.id)}
-    )
+    second = await client.post(f"/api/v1/approvals/{approval.id}/reject", json={"decided_by_user_id": str(user.id)})
     assert second.status_code == 409

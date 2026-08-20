@@ -70,9 +70,7 @@ def _build_agent(db_session, llm, *, max_iterations: int = 6) -> ReservationAgen
         CancelReservationTool(reservation_service),
         GetCustomerTool(customer_service),
     ]
-    return ReservationAgent(
-        llm=llm, tools=tools, agent_run_service=agent_run_service, max_iterations=max_iterations
-    )
+    return ReservationAgent(llm=llm, tools=tools, agent_run_service=agent_run_service, max_iterations=max_iterations)
 
 
 def _tool_names(result) -> set[str]:
@@ -177,9 +175,7 @@ async def test_cancel_an_existing_reservation(db_session, llm):
     await db_session.flush()
 
     agent = _build_agent(db_session, llm)
-    result = await agent.handle(
-        "Cancel Raj's reservation.", restaurant_id=restaurant.id, initiated_by_user_id=user.id
-    )
+    result = await agent.handle("Cancel Raj's reservation.", restaurant_id=restaurant.id, initiated_by_user_id=user.id)
 
     assert result.status != "error", result.summary
     assert _tool_names(result) & {"get_reservations", "get_customer_history"}, (

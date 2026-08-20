@@ -10,7 +10,6 @@ import pytest
 from app.llm.base import LLMMessage
 from app.llm.ollama_provider import OllamaLLMProvider
 
-
 _RealAsyncClient = httpx.AsyncClient
 
 
@@ -92,9 +91,7 @@ async def test_generate_sends_tools_and_parses_tool_calls_from_response(monkeypa
                 "model": "qwen3:8b",
                 "message": {
                     "content": "",
-                    "tool_calls": [
-                        {"function": {"name": "get_customer", "arguments": {"query": "Raj"}}}
-                    ],
+                    "tool_calls": [{"function": {"name": "get_customer", "arguments": {"query": "Raj"}}}],
                 },
             },
         )
@@ -110,6 +107,69 @@ async def test_generate_sends_tools_and_parses_tool_calls_from_response(monkeypa
     assert response.tool_calls[0].name == "get_customer"
     assert response.tool_calls[0].arguments == {"query": "Raj"}
     assert response.content == ""
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_a_connection_error_and_then_succeeds(monkeypatch):
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json={"model": "qwen3:8b", "message": {"content": "hello"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    provider = OllamaLLMProvider(
+        model="qwen3:8b", base_url="http://localhost:11434", max_retries=2, retry_backoff_seconds=0
+    )
+    response = await provider.generate([LLMMessage(role="user", content="hi")])
+
+    assert response.content == "hello"
+    assert len(attempts) == 2  # failed once, succeeded on retry
+
+
+@pytest.mark.asyncio
+async def test_generate_gives_up_after_exhausting_bounded_retries(monkeypatch):
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    provider = OllamaLLMProvider(
+        model="qwen3:8b", base_url="http://localhost:11434", max_retries=2, retry_backoff_seconds=0
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await provider.generate([LLMMessage(role="user", content="hi")])
+
+    assert len(attempts) == 3  # the initial attempt plus exactly 2 retries — bounded, not infinite
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_retry_a_genuine_bad_request(monkeypatch):
+    """A 4xx from Ollama itself (e.g. an unknown model name) means retrying the
+    identical request would just fail identically — fail fast instead."""
+    attempts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(400, json={"error": "model not found"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client_factory(handler))
+
+    provider = OllamaLLMProvider(
+        model="not-a-real-model", base_url="http://localhost:11434", max_retries=2, retry_backoff_seconds=0
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await provider.generate([LLMMessage(role="user", content="hi")])
+
+    assert len(attempts) == 1
 
 
 @pytest.mark.asyncio

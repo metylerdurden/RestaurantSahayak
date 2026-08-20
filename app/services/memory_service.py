@@ -173,8 +173,11 @@ class MemoryService:
         customer," not "what's most relevant to this query" (that's
         `search_memory`, which needs a query string an API list view doesn't have)."""
         with start_span(
-            _tracer, "memory.search", memory_operation="list_by_customer",
-            restaurant_id=str(restaurant_id), customer_id=str(customer_id),
+            _tracer,
+            "memory.search",
+            memory_operation="list_by_customer",
+            restaurant_id=str(restaurant_id),
+            customer_id=str(customer_id),
         ) as span:
             memories = await self.repo.list_by_customer(
                 restaurant_id, customer_id, active_only=active_only, limit=limit
@@ -183,9 +186,7 @@ class MemoryService:
             span.set_attribute("success", True)
             return memories
 
-    async def get_memory(
-        self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, touch: bool = True
-    ) -> Memory:
+    async def get_memory(self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, touch: bool = True) -> Memory:
         memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
         if touch:
             await self.repo.touch_access(memory)
@@ -204,7 +205,10 @@ class MemoryService:
         confidence: float | None = None,
     ) -> Memory:
         with start_span(
-            _tracer, "memory.write", memory_operation="update", restaurant_id=str(restaurant_id),
+            _tracer,
+            "memory.write",
+            memory_operation="update",
+            restaurant_id=str(restaurant_id),
             memory_id=str(memory_id),
         ) as span:
             memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
@@ -241,7 +245,10 @@ class MemoryService:
         self, *, restaurant_id: uuid.UUID, memory_id: uuid.UUID, confidence_step: float = 0.1
     ) -> Memory:
         with start_span(
-            _tracer, "memory.write", memory_operation="reinforce", restaurant_id=str(restaurant_id),
+            _tracer,
+            "memory.write",
+            memory_operation="reinforce",
+            restaurant_id=str(restaurant_id),
             memory_id=str(memory_id),
         ) as span:
             memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
@@ -265,7 +272,10 @@ class MemoryService:
         keeps the row as an audit record, and frees its (type, scope, topic) key for
         a new active memory."""
         with start_span(
-            _tracer, "memory.write", memory_operation="forget", restaurant_id=str(restaurant_id),
+            _tracer,
+            "memory.write",
+            memory_operation="forget",
+            restaurant_id=str(restaurant_id),
             memory_id=str(memory_id),
         ) as span:
             memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)
@@ -279,7 +289,10 @@ class MemoryService:
         "this is no longer true" case — this is for genuine removal (e.g. recorded in
         error)."""
         with start_span(
-            _tracer, "memory.write", memory_operation="delete", restaurant_id=str(restaurant_id),
+            _tracer,
+            "memory.write",
+            memory_operation="delete",
+            restaurant_id=str(restaurant_id),
             memory_id=str(memory_id),
         ) as span:
             memory = self._require(await self.repo.get_by_id(memory_id), restaurant_id, memory_id)

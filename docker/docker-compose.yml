@@ -1,6 +1,11 @@
 services:
   postgres:
-    image: postgres:16
+    # Plain `postgres:16` does NOT include the pgvector extension — the first
+    # migration's `CREATE EXTENSION IF NOT EXISTS vector` (required for the
+    # `memories.embedding` column) would fail against it. `pgvector/pgvector` is
+    # the pgvector project's own official image: the same postgres:16 with the
+    # extension's files pre-installed, nothing else different.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: dineops
       POSTGRES_USER: dineops
@@ -32,6 +37,12 @@ services:
         condition: service_healthy
     volumes:
       - ../app:/app/app:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   dineops_postgres_data:

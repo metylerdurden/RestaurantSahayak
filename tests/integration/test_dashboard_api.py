@@ -19,9 +19,9 @@ from tests.integration.factories import (
     make_event,
     make_inventory_item,
     make_reservation,
+    make_shift_assignment,
     make_staff,
     make_staff_shift,
-    make_shift_assignment,
     make_table,
     make_user,
 )
@@ -51,11 +51,17 @@ async def test_dashboard_assembles_every_panel(client, db_session):
         db_session, restaurant, customer, table, party_size=4, requested_time=future(days=0, hour=19)
     )
     low_item = await make_inventory_item(db_session, restaurant, quantity_on_hand=1, low_stock_threshold=5)
-    await make_inventory_item(db_session, restaurant, quantity_on_hand=50, low_stock_threshold=5)  # healthy, not an alert
+    await make_inventory_item(
+        db_session, restaurant, quantity_on_hand=50, low_stock_threshold=5
+    )  # healthy, not an alert
 
     understaffed_shift = await make_staff_shift(
-        db_session, restaurant, start_at=future(days=0, hour=18), end_at=future(days=0, hour=22),
-        required_staff_count=4, status="understaffed",
+        db_session,
+        restaurant,
+        start_at=future(days=0, hour=18),
+        end_at=future(days=0, hour=22),
+        required_staff_count=4,
+        status="understaffed",
     )
     server = await make_staff(db_session, restaurant)
     await make_shift_assignment(db_session, understaffed_shift, server)
@@ -66,8 +72,12 @@ async def test_dashboard_assembles_every_panel(client, db_session):
 
     db_session.add(
         WorkflowRun(
-            workflow_type="daily_briefing", restaurant_id=restaurant.id, correlation_id=agent_run.correlation_id,
-            status="completed", triggered_by="manual", final_result={"briefing": "Quiet night expected."},
+            workflow_type="daily_briefing",
+            restaurant_id=restaurant.id,
+            correlation_id=agent_run.correlation_id,
+            status="completed",
+            triggered_by="manual",
+            final_result={"briefing": "Quiet night expected."},
         )
     )
     await db_session.flush()

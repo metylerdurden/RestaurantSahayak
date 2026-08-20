@@ -26,6 +26,7 @@ from app.agents.orchestrator_agent import OrchestratorAgent
 from app.agents.reservation_agent import ReservationAgent
 from app.agents.staffing_agent import StaffingAgent
 from app.core.config import get_settings
+from app.embeddings.bge_provider import BGEEmbeddingProvider
 from app.llm.factory import build_llm_provider
 from app.models import AgentRun, Reservation, ShiftAssignment, StaffShift
 from app.repositories.agent_run_repo import AgentRunRepository
@@ -33,6 +34,7 @@ from app.repositories.analytics_repo import AnalyticsRepository
 from app.repositories.approval_repo import ApprovalRepository
 from app.repositories.customer_repo import CustomerRepository
 from app.repositories.inventory_repo import InventoryRepository
+from app.repositories.memory_repo import MemoryRepository
 from app.repositories.reservation_repo import ReservationRepository
 from app.repositories.staffing_repo import StaffingRepository
 from app.services.agent_run_service import AgentRunService
@@ -40,6 +42,7 @@ from app.services.analytics_service import AnalyticsService
 from app.services.approval_service import ApprovalService
 from app.services.customer_service import CustomerService
 from app.services.inventory_service import InventoryService
+from app.services.memory_service import MemoryService
 from app.services.reservation_service import ReservationService
 from app.services.staffing_service import StaffingService
 from app.tools.analytics_tools import GetDailySalesTool, GetItemSalesTool, GetNoShowRateTool
@@ -51,6 +54,7 @@ from app.tools.inventory_tools import (
     CreatePurchaseRequestTool,
     GetInventoryTool,
 )
+from app.tools.memory_tools import SearchMemoryTool
 from app.tools.reservation_tools import (
     CancelReservationTool,
     CreateReservationTool,
@@ -75,6 +79,11 @@ from tests.integration.factories import (
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(scope="module")
+def embedder():
+    return BGEEmbeddingProvider(model_name="BAAI/bge-m3")
+
+
 @pytest_asyncio.fixture
 async def llm():
     provider = build_llm_provider(get_settings())
@@ -97,8 +106,10 @@ def _build_specialists(db_session, llm) -> dict:
     reservation_agent = ReservationAgent(
         llm=llm,
         tools=[
-            GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-            CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
             CancelReservationTool(reservation_service),
         ],
         agent_run_service=agent_run_service,
@@ -106,15 +117,18 @@ def _build_specialists(db_session, llm) -> dict:
     inventory_agent = InventoryAgent(
         llm=llm,
         tools=[
-            GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-            CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=agent_run_service,
     )
     staffing_agent = StaffingAgent(
         llm=llm,
         tools=[
-            GetStaffScheduleTool(staffing_service), GetStaffAvailabilityTool(staffing_service),
+            GetStaffScheduleTool(staffing_service),
+            GetStaffAvailabilityTool(staffing_service),
             CalculateStaffRequirementTool(staffing_service),
         ],
         agent_run_service=agent_run_service,
@@ -122,14 +136,19 @@ def _build_specialists(db_session, llm) -> dict:
     customer_agent = CustomerAgent(
         llm=llm,
         tools=[
-            GetCustomerTool(customer_service), GetCustomerHistoryTool(customer_service),
+            GetCustomerTool(customer_service),
+            GetCustomerHistoryTool(customer_service),
             UpdateCustomerTool(customer_service),
         ],
         agent_run_service=agent_run_service,
     )
     analytics_agent = AnalyticsAgent(
         llm=llm,
-        tools=[GetDailySalesTool(analytics_service), GetItemSalesTool(analytics_service), GetNoShowRateTool(analytics_service)],
+        tools=[
+            GetDailySalesTool(analytics_service),
+            GetItemSalesTool(analytics_service),
+            GetNoShowRateTool(analytics_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
@@ -159,8 +178,13 @@ async def test_are_we_ready_for_tonight_invokes_multiple_specialists_and_combine
     start, end = _tonight_window()
     db_session.add(
         Reservation(
-            restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=4,
-            requested_time=start + timedelta(minutes=30), status="booked", created_via="manager_request",
+            restaurant_id=restaurant.id,
+            customer_id=customer.id,
+            table_id=table.id,
+            party_size=4,
+            requested_time=start + timedelta(minutes=30),
+            status="booked",
+            created_via="manager_request",
         )
     )
     server = await make_staff(db_session, restaurant, role="server", name="Alex")
@@ -190,8 +214,10 @@ async def test_are_we_ready_for_tonight_invokes_multiple_specialists_and_combine
     # Traceability: every specialist invoked is a real, separately-recorded AgentRun
     # linked under this orchestrator's run.
     child_runs = (
-        await db_session.execute(select(AgentRun).where(AgentRun.parent_run_id == result.orchestrator_run_id))
-    ).scalars().all()
+        (await db_session.execute(select(AgentRun).where(AgentRun.parent_run_id == result.orchestrator_run_id)))
+        .scalars()
+        .all()
+    )
     assert len(child_runs) == len(result.invocations)
 
 
@@ -217,3 +243,78 @@ async def test_book_raj_flow_uses_customer_then_reservation_agent(db_session, ll
     invoked = [inv.agent_name for inv in result.invocations]
     assert "customer" in invoked, result.summary
     assert all(inv.status != "error" for inv in result.invocations), result.invocations
+
+
+async def test_reservation_workflow_surfaces_a_customers_persistent_seating_preference(db_session, llm, embedder):
+    """Step 20's required persistent-memory scenario, at the workflow level: given
+    a preference already in persistent memory (recording it via a real CustomerAgent
+    + Qwen3-8B round trip is already covered end to end by
+    test_customer_agent_live.py — this test is about the part that isn't:
+    does a reservation workflow that delegates to the Customer Agent actually
+    surface a relevant memory in what it reports, rather than ignoring it?)."""
+    restaurant = await make_restaurant(db_session)
+    user = await make_user(db_session, restaurant)
+    raj = await make_customer(db_session, restaurant, name="Raj Patel", phone="+15551240099")
+    for capacity in (2, 4, 6):
+        await make_table(db_session, restaurant, seat_capacity=capacity)
+
+    memory_service = MemoryService(MemoryRepository(db_session), embedder)
+    await memory_service.add_memory(
+        restaurant_id=restaurant.id,
+        customer_id=raj.id,
+        memory_type="CUSTOMER_PREFERENCE",
+        topic="seating_preference",
+        content={"text": "Raj prefers a quiet table away from the kitchen."},
+        source="manager_stated",
+    )
+
+    agent_run_service = AgentRunService(AgentRunRepository(db_session))
+    customer_service = CustomerService(CustomerRepository(db_session))
+    approval_service = ApprovalService(ApprovalRepository(db_session))
+    reservation_service = ReservationService(
+        ReservationRepository(db_session), CustomerRepository(db_session), approval_service, get_settings()
+    )
+    customer_agent = CustomerAgent(
+        llm=llm,
+        tools=[
+            GetCustomerTool(customer_service),
+            GetCustomerHistoryTool(customer_service),
+            UpdateCustomerTool(customer_service),
+            SearchMemoryTool(memory_service),
+        ],
+        agent_run_service=agent_run_service,
+    )
+    reservation_agent = ReservationAgent(
+        llm=llm,
+        tools=[
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
+            CancelReservationTool(reservation_service),
+        ],
+        agent_run_service=agent_run_service,
+    )
+    orchestrator = OrchestratorAgent(
+        llm=llm,
+        specialists={"customer": customer_agent, "reservation": reservation_agent},
+        agent_run_service=agent_run_service,
+    )
+
+    result = await orchestrator.handle(
+        "Book Raj for Friday at 8pm. Before confirming, check whether we have any "
+        "preferences or notes on file for him from past visits — for example "
+        "seating preferences — that the server should know about.",
+        restaurant_id=restaurant.id,
+        initiated_by_user_id=user.id,
+    )
+
+    assert result.status != "error", result.summary
+    invoked = {inv.agent_name for inv in result.invocations}
+    assert "customer" in invoked, result.summary
+
+    customer_invocation = next(inv for inv in result.invocations if inv.agent_name == "customer")
+    assert "quiet" in customer_invocation.summary.lower(), (
+        "the customer specialist must actually surface the persisted preference, "
+        f"not just resolve the customer: {customer_invocation.summary}"
+    )

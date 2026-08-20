@@ -75,8 +75,10 @@ async def create_reservation(
     stack = build_agent_stack(session)
     try:
         run, context = await start_manager_run(
-            stack.agent_run_service, stack.user_repo,
-            restaurant_id=body.restaurant_id, initiated_by_user_id=body.initiated_by_user_id,
+            stack.agent_run_service,
+            stack.user_repo,
+            restaurant_id=body.restaurant_id,
+            initiated_by_user_id=body.initiated_by_user_id,
         )
     except ToolError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
@@ -110,8 +112,10 @@ async def modify_reservation(
     stack = build_agent_stack(session)
     try:
         run, context = await start_manager_run(
-            stack.agent_run_service, stack.user_repo,
-            restaurant_id=body.restaurant_id, initiated_by_user_id=body.initiated_by_user_id,
+            stack.agent_run_service,
+            stack.user_repo,
+            restaurant_id=body.restaurant_id,
+            initiated_by_user_id=body.initiated_by_user_id,
         )
     except ToolError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
@@ -152,8 +156,10 @@ async def cancel_reservation(
     stack = build_agent_stack(session)
     try:
         run, context = await start_manager_run(
-            stack.agent_run_service, stack.user_repo,
-            restaurant_id=restaurant_id, initiated_by_user_id=initiated_by_user_id,
+            stack.agent_run_service,
+            stack.user_repo,
+            restaurant_id=restaurant_id,
+            initiated_by_user_id=initiated_by_user_id,
         )
     except ToolError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc

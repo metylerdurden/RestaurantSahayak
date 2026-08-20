@@ -89,7 +89,8 @@ async def test_agent_run_and_tool_call_spans_are_created_and_nested(agent_run_se
     ]
     responses = [
         LLMResponse(
-            content="", model="fake-model",
+            content="",
+            model="fake-model",
             tool_calls=[ToolCall(id="c0", name="get_customer", arguments={"query": "Raj"})],
         ),
         LLMResponse(content="Found Raj.", model="fake-model"),
@@ -98,7 +99,7 @@ async def test_agent_run_and_tool_call_spans_are_created_and_nested(agent_run_se
         llm=ScriptedLLM(responses), tools=[GetCustomerTool(customer_service)], agent_run_service=agent_run_service
     )
 
-    result = await agent.handle("Find Raj", restaurant_id=RESTAURANT_ID)
+    await agent.handle("Find Raj", restaurant_id=RESTAURANT_ID)
 
     spans = _spans_by_name(otel_spans)
     assert "customer_agent.run" in spans
@@ -135,8 +136,11 @@ class FakeSpecialist:
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
     )
 
 
@@ -144,12 +148,31 @@ def _finish() -> LLMResponse:
     return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="f", name="finish", arguments={})])
 
 
+def _identify_domains(*domains: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
+    )
+
+
 async def test_orchestrator_run_span_is_created_with_delegation_count(agent_run_service, otel_spans):
     reservation = FakeSpecialist(
         "reservation",
-        [AgentResult(agent_run_id=uuid.uuid4(), status="completed", summary="3 reservations tonight.", tool_calls=[], data=None, error=None, latency_ms=5)],
+        [
+            AgentResult(
+                agent_run_id=uuid.uuid4(),
+                status="completed",
+                summary="3 reservations tonight.",
+                tool_calls=[],
+                data=None,
+                error=None,
+                latency_ms=5,
+            )
+        ],
     )
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "How many reservations tonight?"),
         _finish(),
         LLMResponse(content="3 reservations tonight.", model="fake-model"),
@@ -226,10 +249,19 @@ class FakeEmbeddings(EmbeddingProvider):
 
 def _memory_row(**overrides):
     defaults = dict(
-        id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, customer_id=None, agent_name=None,
-        memory_type="CUSTOMER_PREFERENCE", topic="seating_preference",
-        content={"text": "Prefers a window table."}, embedding=[0.1] * 8, importance=3,
-        confidence=Decimal("1.00"), source="manager_stated", is_active=True, access_count=0,
+        id=uuid.uuid4(),
+        restaurant_id=RESTAURANT_ID,
+        customer_id=None,
+        agent_name=None,
+        memory_type="CUSTOMER_PREFERENCE",
+        topic="seating_preference",
+        content={"text": "Prefers a window table."},
+        embedding=[0.1] * 8,
+        importance=3,
+        confidence=Decimal("1.00"),
+        source="manager_stated",
+        is_active=True,
+        access_count=0,
         last_accessed_at=None,
     )
     defaults.update(overrides)
@@ -246,8 +278,11 @@ async def test_memory_write_and_search_spans_carry_the_operation_not_the_content
     service = MemoryService(repo, FakeEmbeddings())
 
     await service.add_memory(
-        restaurant_id=RESTAURANT_ID, memory_type="CUSTOMER_PREFERENCE", topic="seating_preference",
-        content={"text": "Prefers a quiet table."}, source="manager_stated",
+        restaurant_id=RESTAURANT_ID,
+        memory_type="CUSTOMER_PREFERENCE",
+        topic="seating_preference",
+        content={"text": "Prefers a quiet table."},
+        source="manager_stated",
     )
     await service.search_memory(restaurant_id=RESTAURANT_ID, query="seating preference")
 
@@ -274,10 +309,18 @@ async def test_event_publish_and_handle_spans_are_created_and_nested(otel_spans)
         from datetime import datetime, timezone
 
         defaults = dict(
-            id=uuid.uuid4(), event_type="reservation.created", restaurant_id=RESTAURANT_ID,
-            entity_id=uuid.uuid4(), payload={"party_size": 4}, correlation_id=uuid.uuid4(),
-            published_by="reservation_service", idempotency_key=None,
-            created_at=datetime.now(timezone.utc), handled=False, handled_at=None, handler_results=None,
+            id=uuid.uuid4(),
+            event_type="reservation.created",
+            restaurant_id=RESTAURANT_ID,
+            entity_id=uuid.uuid4(),
+            payload={"party_size": 4},
+            correlation_id=uuid.uuid4(),
+            published_by="reservation_service",
+            idempotency_key=None,
+            created_at=datetime.now(timezone.utc),
+            handled=False,
+            handled_at=None,
+            handler_results=None,
         )
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
@@ -292,8 +335,11 @@ async def test_event_publish_and_handle_spans_are_created_and_nested(otel_spans)
 
     bus.subscribe("reservation.created", handler, name="test_handler")
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={"party_size": 4}, published_by="reservation_service",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={"party_size": 4},
+        published_by="reservation_service",
     )
 
     spans = _spans_by_name(otel_spans)
@@ -313,9 +359,16 @@ async def test_event_publish_and_handle_spans_are_created_and_nested(otel_spans)
 
 def _approval(**overrides):
     defaults = dict(
-        id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, domain="reservation", action="cancel_reservation",
-        agent_name="reservation", proposed_by_agent_run_id=uuid.uuid4(), reason="Cancel a large party",
-        risk_level="MEDIUM", status="pending", execution_result=None,
+        id=uuid.uuid4(),
+        restaurant_id=RESTAURANT_ID,
+        domain="reservation",
+        action="cancel_reservation",
+        agent_name="reservation",
+        proposed_by_agent_run_id=uuid.uuid4(),
+        reason="Cancel a large party",
+        risk_level="MEDIUM",
+        status="pending",
+        execution_result=None,
     )
     defaults.update(overrides)
     return type("Approval", (), defaults)()
@@ -330,8 +383,14 @@ async def test_approval_create_and_approve_spans_carry_status(otel_spans):
     service = ApprovalService(repo)
 
     await service.create_approval_request(
-        restaurant_id=RESTAURANT_ID, domain="reservation", action="cancel_reservation", agent_name="reservation",
-        proposed_by_agent_run_id=uuid.uuid4(), parameters={}, reason="Cancel a large party", risk_level="MEDIUM",
+        restaurant_id=RESTAURANT_ID,
+        domain="reservation",
+        action="cancel_reservation",
+        agent_name="reservation",
+        proposed_by_agent_run_id=uuid.uuid4(),
+        parameters={},
+        reason="Cancel a large party",
+        risk_level="MEDIUM",
     )
     created.status = "pending"
     await service.approve(created.id, uuid.uuid4())

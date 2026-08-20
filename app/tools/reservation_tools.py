@@ -23,19 +23,14 @@ from app.tools.base import PendingApprovalOutput, Tool, ToolContext
 
 class GetReservationsTool(Tool[GetReservationsInput, GetReservationsOutput]):
     name = "get_reservations"
-    description = (
-        "List reservations for the restaurant, optionally filtered by date range, "
-        "status, or customer."
-    )
+    description = "List reservations for the restaurant, optionally filtered by date range, status, or customer."
     input_model = GetReservationsInput
     output_model = GetReservationsOutput
 
     def __init__(self, service: ReservationService) -> None:
         self.service = service
 
-    async def run(
-        self, input: GetReservationsInput, *, context: ToolContext
-    ) -> GetReservationsOutput:
+    async def run(self, input: GetReservationsInput, *, context: ToolContext) -> GetReservationsOutput:
         reservations = await self.service.get_reservations(
             restaurant_id=context.restaurant_id,
             date_from=input.date_from,
@@ -43,26 +38,19 @@ class GetReservationsTool(Tool[GetReservationsInput, GetReservationsOutput]):
             status=input.status,
             customer_id=input.customer_id,
         )
-        return GetReservationsOutput(
-            reservations=[ReservationDTO.model_validate(r) for r in reservations]
-        )
+        return GetReservationsOutput(reservations=[ReservationDTO.model_validate(r) for r in reservations])
 
 
 class FindAvailableTableTool(Tool[FindAvailableTableInput, FindAvailableTableOutput]):
     name = "find_available_table"
-    description = (
-        "Find tables with enough seating capacity and no scheduling conflict for a "
-        "given party size and time."
-    )
+    description = "Find tables with enough seating capacity and no scheduling conflict for a given party size and time."
     input_model = FindAvailableTableInput
     output_model = FindAvailableTableOutput
 
     def __init__(self, service: ReservationService) -> None:
         self.service = service
 
-    async def run(
-        self, input: FindAvailableTableInput, *, context: ToolContext
-    ) -> FindAvailableTableOutput:
+    async def run(self, input: FindAvailableTableInput, *, context: ToolContext) -> FindAvailableTableOutput:
         tables = await self.service.find_available_table(
             restaurant_id=context.restaurant_id,
             party_size=input.party_size,
@@ -70,9 +58,7 @@ class FindAvailableTableTool(Tool[FindAvailableTableInput, FindAvailableTableOut
             duration_minutes=input.duration_minutes,
         )
         return FindAvailableTableOutput(
-            options=[
-                {"id": t.id, "label": t.label, "seat_capacity": t.seat_capacity} for t in tables
-            ]
+            options=[{"id": t.id, "label": t.label, "seat_capacity": t.seat_capacity} for t in tables]
         )
 
 
@@ -85,9 +71,7 @@ class CreateReservationTool(Tool[CreateReservationInput, CreateReservationOutput
     def __init__(self, service: ReservationService) -> None:
         self.service = service
 
-    async def run(
-        self, input: CreateReservationInput, *, context: ToolContext
-    ) -> CreateReservationOutput:
+    async def run(self, input: CreateReservationInput, *, context: ToolContext) -> CreateReservationOutput:
         reservation = await self.service.create_reservation(
             restaurant_id=context.restaurant_id,
             customer_id=input.customer_id,
@@ -134,8 +118,7 @@ class ModifyReservationTool(Tool[ModifyReservationInput, ModifyReservationOutput
 class CancelReservationTool(Tool[CancelReservationInput, CancelReservationOutput]):
     name = "cancel_reservation"
     description = (
-        "Cancel an existing reservation. Cancelling a large party requires manager "
-        "approval before it takes effect."
+        "Cancel an existing reservation. Cancelling a large party requires manager approval before it takes effect."
     )
     input_model = CancelReservationInput
     output_model = CancelReservationOutput

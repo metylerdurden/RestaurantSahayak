@@ -6,6 +6,8 @@ tests/integration/test_approval_workflow.py's end-to-end scenarios."""
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,6 +18,25 @@ from app.services.memory_service import MemoryService
 from app.tools.base import ToolError
 
 RESTAURANT_ID = uuid.uuid4()
+
+
+def _mock_repo() -> AsyncMock:
+    """ApprovalService._execute()/_remember() run their best-effort work inside a
+    SAVEPOINT (`self.repo.session.begin_nested()`, Step 20 reliability hardening)
+    so a real database-level failure there can't poison the rest of the request's
+    transaction — see tests/integration/test_approval_workflow.py for a test that
+    exercises that with a real Postgres session. Here, with a mocked repository,
+    `.session.begin_nested()` just needs to behave like a real no-op async
+    context manager so these unit tests keep testing application-level behavior
+    only, not transaction mechanics."""
+    repo = AsyncMock(spec=ApprovalRepository)
+
+    @asynccontextmanager
+    async def _noop_savepoint():
+        yield
+
+    repo.session = SimpleNamespace(begin_nested=_noop_savepoint)
+    return repo
 
 
 def _approval(**overrides):
@@ -37,7 +58,7 @@ def _approval(**overrides):
 
 @pytest.mark.asyncio
 async def test_create_approval_request_persists_pending_with_risk_level():
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.create.return_value = _approval()
     service = ApprovalService(repo)
 
@@ -62,7 +83,7 @@ async def test_create_approval_request_persists_pending_with_risk_level():
 async def test_create_approval_request_rejects_low_risk():
     """LOW-risk actions execute automatically and must never create an approval
     record — this is the service-level guard behind "automatic low-risk action"."""
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     service = ApprovalService(repo)
 
     with pytest.raises(ToolError) as exc_info:
@@ -82,31 +103,43 @@ async def test_create_approval_request_rejects_low_risk():
 
 @pytest.mark.asyncio
 async def test_create_approval_request_rejects_invalid_domain():
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     service = ApprovalService(repo)
     with pytest.raises(ToolError) as exc_info:
         await service.create_approval_request(
-            restaurant_id=RESTAURANT_ID, domain="not_a_domain", action="x", agent_name="x",
-            proposed_by_agent_run_id=uuid.uuid4(), parameters={}, reason="x", risk_level="MEDIUM",
+            restaurant_id=RESTAURANT_ID,
+            domain="not_a_domain",
+            action="x",
+            agent_name="x",
+            proposed_by_agent_run_id=uuid.uuid4(),
+            parameters={},
+            reason="x",
+            risk_level="MEDIUM",
         )
     assert exc_info.value.code == "invalid_domain"
 
 
 @pytest.mark.asyncio
 async def test_create_approval_request_rejects_invalid_risk_level():
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     service = ApprovalService(repo)
     with pytest.raises(ToolError) as exc_info:
         await service.create_approval_request(
-            restaurant_id=RESTAURANT_ID, domain="reservation", action="x", agent_name="x",
-            proposed_by_agent_run_id=uuid.uuid4(), parameters={}, reason="x", risk_level="EXTREME",
+            restaurant_id=RESTAURANT_ID,
+            domain="reservation",
+            action="x",
+            agent_name="x",
+            proposed_by_agent_run_id=uuid.uuid4(),
+            parameters={},
+            reason="x",
+            risk_level="EXTREME",
         )
     assert exc_info.value.code == "invalid_risk_level"
 
 
 @pytest.mark.asyncio
 async def test_get_pending_approvals_delegates_to_repo():
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     pending = [_approval(), _approval()]
     repo.list_pending.return_value = pending
     service = ApprovalService(repo)
@@ -119,7 +152,7 @@ async def test_get_pending_approvals_delegates_to_repo():
 @pytest.mark.asyncio
 async def test_approve_transitions_status_and_sets_approved_at():
     approval = _approval(status="pending")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     service = ApprovalService(repo)
@@ -131,7 +164,7 @@ async def test_approve_transitions_status_and_sets_approved_at():
 
 @pytest.mark.asyncio
 async def test_approve_unknown_approval_raises_not_found():
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = None
     service = ApprovalService(repo)
     with pytest.raises(ToolError) as exc_info:
@@ -142,7 +175,7 @@ async def test_approve_unknown_approval_raises_not_found():
 @pytest.mark.asyncio
 async def test_approve_already_decided_raises():
     approval = _approval(status="approved")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     service = ApprovalService(repo)
     with pytest.raises(ToolError) as exc_info:
@@ -153,7 +186,7 @@ async def test_approve_already_decided_raises():
 @pytest.mark.asyncio
 async def test_approve_expired_approval_raises_distinct_error():
     approval = _approval(status="expired")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     service = ApprovalService(repo)
     with pytest.raises(ToolError) as exc_info:
@@ -164,7 +197,7 @@ async def test_approve_expired_approval_raises_distinct_error():
 @pytest.mark.asyncio
 async def test_reject_transitions_status_and_sets_rejected_at():
     approval = _approval(status="pending")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     service = ApprovalService(repo)
@@ -177,7 +210,7 @@ async def test_reject_transitions_status_and_sets_rejected_at():
 @pytest.mark.asyncio
 async def test_expire_marks_overdue_pending_approvals():
     overdue = [_approval(status="pending"), _approval(status="pending")]
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.list_overdue.return_value = overdue
     service = ApprovalService(repo)
 
@@ -191,7 +224,7 @@ async def test_expire_marks_overdue_pending_approvals():
 @pytest.mark.asyncio
 async def test_approve_executes_registered_executor_and_records_success():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
 
@@ -208,7 +241,7 @@ async def test_approve_executes_registered_executor_and_records_success():
 @pytest.mark.asyncio
 async def test_approve_records_failed_execution_without_undoing_the_decision():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
 
@@ -223,13 +256,16 @@ async def test_approve_records_failed_execution_without_undoing_the_decision():
     # execution failed.
     assert result.status == "approved"
     assert result.execution_result["status"] == "failed"
-    assert "reservation_not_found" in result.execution_result["error"] or "No reservation found" in result.execution_result["error"]
+    assert (
+        "reservation_not_found" in result.execution_result["error"]
+        or "No reservation found" in result.execution_result["error"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_approve_without_executor_configured_leaves_execution_result_unset():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     service = ApprovalService(repo)  # no executors — preserves original propose/decide-only behavior
@@ -246,7 +282,7 @@ async def test_approve_without_executor_configured_leaves_execution_result_unset
 @pytest.mark.asyncio
 async def test_approve_stores_a_past_decision_memory_when_memory_service_configured():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     memory_service = AsyncMock(spec=MemoryService)
@@ -264,7 +300,7 @@ async def test_approve_stores_a_past_decision_memory_when_memory_service_configu
 @pytest.mark.asyncio
 async def test_reject_stores_a_memory_too():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     memory_service = AsyncMock(spec=MemoryService)
@@ -281,7 +317,7 @@ async def test_reject_stores_a_memory_too():
 @pytest.mark.asyncio
 async def test_memory_recording_failure_does_not_break_approve():
     approval = _approval(status="pending", domain="reservation")
-    repo = AsyncMock(spec=ApprovalRepository)
+    repo = _mock_repo()
     repo.get_by_id.return_value = approval
     repo.save.side_effect = lambda a: a
     memory_service = AsyncMock(spec=MemoryService)

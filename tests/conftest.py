@@ -15,7 +15,6 @@ os.environ.setdefault(
 
 import pytest
 import pytest_asyncio
-from alembic import command
 from alembic.config import Config
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -23,6 +22,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from alembic import command
 
 # One real SDK TracerProvider for the whole test session, backed by an in-memory
 # exporter instead of the app's normal console/OTLP exporter. Installed at import

@@ -79,8 +79,11 @@ async def test_publish_persists_the_event_with_all_required_fields(bus, repo):
 async def test_publish_rejects_unknown_event_type(bus):
     with pytest.raises(ToolError) as exc_info:
         await bus.publish(
-            event_type="not.a.real.event", restaurant_id=RESTAURANT_ID, entity_id=None,
-            payload={}, published_by="x",
+            event_type="not.a.real.event",
+            restaurant_id=RESTAURANT_ID,
+            entity_id=None,
+            payload={},
+            published_by="x",
         )
     assert exc_info.value.code == "invalid_event_type"
 
@@ -103,8 +106,11 @@ async def test_publish_dispatches_to_a_subscribed_handler(bus):
 
     bus.subscribe("reservation.created", handler, name="test_handler")
     envelope = await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={"party_size": 2}, published_by="reservation_service",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={"party_size": 2},
+        published_by="reservation_service",
     )
 
     assert len(received) == 1
@@ -125,8 +131,11 @@ async def test_publish_dispatches_to_multiple_handlers_independently(bus):
     bus.subscribe("reservation.created", handler_a, name="a")
     bus.subscribe("reservation.created", handler_b, name="b")
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     assert sorted(calls) == ["a", "b"]
@@ -141,8 +150,11 @@ async def test_publish_does_not_dispatch_to_handlers_of_a_different_event_type(b
 
     bus.subscribe("inventory.low", handler)
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     assert received == []
@@ -155,8 +167,11 @@ async def test_publish_never_raises_when_a_handler_fails(bus, repo):
 
     bus.subscribe("reservation.created", failing_handler, name="failing")
     envelope = await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
     assert envelope is not None  # publish() completed despite the handler blowing up
 
@@ -174,8 +189,11 @@ async def test_one_handler_failing_does_not_stop_another_handler_from_running(bu
     bus.subscribe("reservation.created", failing_handler, name="failing")
     bus.subscribe("reservation.created", working_handler, name="working")
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     assert calls == ["worked"]
@@ -192,8 +210,11 @@ async def test_failing_handler_is_retried_up_to_the_configured_limit(repo):
 
     bus.subscribe("reservation.created", flaky_handler)
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     assert len(attempts) == 3  # 1 initial attempt + 2 retries
@@ -211,8 +232,11 @@ async def test_handler_recovering_on_retry_counts_as_success(repo):
 
     bus.subscribe("reservation.created", recovers_on_second_try)
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     assert len(attempts) == 2
@@ -225,8 +249,11 @@ async def test_event_is_marked_handled_with_handler_results_after_dispatch(bus, 
 
     bus.subscribe("reservation.created", handler, name="my_handler")
     await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
     )
 
     saved_event = repo.save.call_args.args[0]
@@ -246,18 +273,31 @@ async def test_publish_with_same_idempotency_key_does_not_redispatch(repo):
     bus.subscribe("reservation.created", handler)
 
     first = await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x", idempotency_key="res-123-created",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
+        idempotency_key="res-123-created",
     )
     # Simulate the retried publish finding the already-persisted event.
     repo.get_by_idempotency_key.return_value = _event_row(
-        id=first.event_id, event_type="reservation.created", restaurant_id=RESTAURANT_ID,
-        idempotency_key="res-123-created", correlation_id=first.correlation_id,
-        published_by="x", entity_id=first.entity_id, payload={},
+        id=first.event_id,
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        idempotency_key="res-123-created",
+        correlation_id=first.correlation_id,
+        published_by="x",
+        entity_id=first.entity_id,
+        payload={},
     )
     second = await bus.publish(
-        event_type="reservation.created", restaurant_id=RESTAURANT_ID, entity_id=uuid.uuid4(),
-        payload={}, published_by="x", idempotency_key="res-123-created",
+        event_type="reservation.created",
+        restaurant_id=RESTAURANT_ID,
+        entity_id=uuid.uuid4(),
+        payload={},
+        published_by="x",
+        idempotency_key="res-123-created",
     )
 
     assert second.event_id == first.event_id

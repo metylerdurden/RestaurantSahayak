@@ -95,8 +95,12 @@ class ApprovalService:
         # detail (e.g. a reservation's party size or a memory-derived rationale)
         # beyond the plain identifiers/status telemetry needs.
         with start_span(
-            _tracer, "approval.create", domain=domain, agent_name=agent_name,
-            restaurant_id=str(restaurant_id), risk_level=risk_level,
+            _tracer,
+            "approval.create",
+            domain=domain,
+            agent_name=agent_name,
+            restaurant_id=str(restaurant_id),
+            risk_level=risk_level,
         ) as span:
             if domain not in APPROVAL_DOMAINS:
                 raise ToolError("invalid_domain", f"Unknown approval domain: {domain!r}")
@@ -211,8 +215,18 @@ class ApprovalService:
             # this feature existed.
             return
 
+        # The executor call runs inside a SAVEPOINT: if it fails with a database-
+        # level error (not just an application-level exception — e.g. a constraint
+        # violation or a lost connection), a plain try/except is not enough. Postgres
+        # marks the whole surrounding transaction unusable until it's rolled back, so
+        # without this, the very next database write on this session (recording the
+        # failure below, or approve()'s event-publish calls right after) would itself
+        # raise, masking the fact that the approval decision already succeeded.
+        # ROLLBACK TO SAVEPOINT undoes only the executor's own work and leaves the
+        # session healthy for everything that follows.
         try:
-            result = await executor(approval)
+            async with self.repo.session.begin_nested():
+                result = await executor(approval)
             approval.execution_result = {"status": "success", "result": result}
         except Exception as exc:
             _logger.warning(
@@ -236,20 +250,24 @@ class ApprovalService:
             text += f" Note: {note}"
 
         try:
-            await self.memory_service.add_memory(
-                restaurant_id=approval.restaurant_id,
-                agent_name=approval.agent_name,
-                memory_type="PAST_DECISION",
-                # Unique per approval — each past decision is its own historical
-                # fact, not a "current truth" that should supersede prior ones the
-                # way a customer preference does.
-                topic=f"approval_{approval.id}",
-                content={"text": text},
-                source="manager_stated",
-                importance=5 if approval.risk_level == "HIGH" else 3,
-                confidence=1.0,
-                source_agent_run_id=approval.proposed_by_agent_run_id,
-            )
+            # Same SAVEPOINT rationale as _execute() above: a database-level failure
+            # while recording this memory must not poison the session for the
+            # _publish() calls (and the request's eventual commit) that follow.
+            async with self.repo.session.begin_nested():
+                await self.memory_service.add_memory(
+                    restaurant_id=approval.restaurant_id,
+                    agent_name=approval.agent_name,
+                    memory_type="PAST_DECISION",
+                    # Unique per approval — each past decision is its own historical
+                    # fact, not a "current truth" that should supersede prior ones the
+                    # way a customer preference does.
+                    topic=f"approval_{approval.id}",
+                    content={"text": text},
+                    source="manager_stated",
+                    importance=5 if approval.risk_level == "HIGH" else 3,
+                    confidence=1.0,
+                    source_agent_run_id=approval.proposed_by_agent_run_id,
+                )
         except Exception as exc:
             # Memory recording is observability, not the primary effect — it must
             # never undo or mask a real approval decision/execution that already happened.

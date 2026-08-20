@@ -55,13 +55,13 @@ async def test_seed_produces_realistic_referentially_consistent_data(_migrated_t
         assert await _count(session, Memory) >= 5
 
         low_stock_items = (
-            await session.execute(select(InventoryItem).where(InventoryItem.status != "ok"))
-        ).scalars().all()
+            (await session.execute(select(InventoryItem).where(InventoryItem.status != "ok"))).scalars().all()
+        )
         assert len(low_stock_items) >= 1, "seed data must include at least one low/out-of-stock item"
 
         understaffed = (
-            await session.execute(select(StaffShift).where(StaffShift.status == "understaffed"))
-        ).scalars().all()
+            (await session.execute(select(StaffShift).where(StaffShift.status == "understaffed"))).scalars().all()
+        )
         assert len(understaffed) >= 1, "seed data must include at least one understaffed shift"
 
         memories = (await session.execute(select(Memory))).scalars().all()

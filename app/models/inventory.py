@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -43,8 +44,11 @@ class InventoryItem(Base, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     unit: Mapped[str] = mapped_column(String, nullable=False)
-    quantity_on_hand: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False, default=0)
-    low_stock_threshold: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False, default=0)
+    # Numeric round-trips as Decimal, not float — InventoryService already does
+    # Decimal arithmetic against these (calculate_required_inventory); this just
+    # makes the type hint match reality.
+    quantity_on_hand: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=0)
+    low_stock_threshold: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String, nullable=False, default="ok")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

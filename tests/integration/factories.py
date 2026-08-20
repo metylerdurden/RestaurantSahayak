@@ -16,9 +16,9 @@ from app.models import (
     MenuItem,
     Reservation,
     Restaurant,
+    ShiftAssignment,
     Staff,
     StaffShift,
-    ShiftAssignment,
     Table,
     User,
 )
@@ -111,8 +111,14 @@ async def make_agent_run(
 
 
 async def make_reservation(
-    session, restaurant: Restaurant, customer: Customer, table: Table, *,
-    party_size: int = 4, requested_time: datetime | None = None, status: str = "booked",
+    session,
+    restaurant: Restaurant,
+    customer: Customer,
+    table: Table,
+    *,
+    party_size: int = 4,
+    requested_time: datetime | None = None,
+    status: str = "booked",
 ) -> Reservation:
     r = Reservation(
         restaurant_id=restaurant.id,
@@ -129,9 +135,14 @@ async def make_reservation(
 
 
 async def make_staff_shift(
-    session, restaurant: Restaurant, *,
-    start_at: datetime | None = None, end_at: datetime | None = None,
-    required_staff_count: int = 4, status: str = "understaffed", is_published: bool = True,
+    session,
+    restaurant: Restaurant,
+    *,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    required_staff_count: int = 4,
+    status: str = "understaffed",
+    is_published: bool = True,
 ) -> StaffShift:
     start = start_at or future(hour=18)
     end = end_at or (start + timedelta(hours=4))
@@ -156,10 +167,16 @@ async def make_shift_assignment(session, shift: StaffShift, staff: Staff) -> Shi
 
 
 async def make_approval(
-    session, restaurant: Restaurant, agent_run: AgentRun, *,
-    domain: str = "reservation", action: str = "cancel_reservation",
-    agent_name: str = "reservation", risk_level: str = "MEDIUM",
-    parameters: dict | None = None, reason: str = "Test approval",
+    session,
+    restaurant: Restaurant,
+    agent_run: AgentRun,
+    *,
+    domain: str = "reservation",
+    action: str = "cancel_reservation",
+    agent_name: str = "reservation",
+    risk_level: str = "MEDIUM",
+    parameters: dict | None = None,
+    reason: str = "Test approval",
 ) -> Approval:
     a = Approval(
         restaurant_id=restaurant.id,
@@ -178,9 +195,13 @@ async def make_approval(
 
 
 async def make_event(
-    session, restaurant: Restaurant, *,
-    event_type: str = "reservation.created", entity_id: uuid.UUID | None = None,
-    payload: dict | None = None, published_by: str = "test",
+    session,
+    restaurant: Restaurant,
+    *,
+    event_type: str = "reservation.created",
+    entity_id: uuid.UUID | None = None,
+    payload: dict | None = None,
+    published_by: str = "test",
 ) -> Event:
     e = Event(
         restaurant_id=restaurant.id,
@@ -196,6 +217,4 @@ async def make_event(
 
 
 def future(days: int = 1, hour: int = 19) -> datetime:
-    return (datetime.now(timezone.utc) + timedelta(days=days)).replace(
-        hour=hour, minute=0, second=0, microsecond=0
-    )
+    return (datetime.now(timezone.utc) + timedelta(days=days)).replace(hour=hour, minute=0, second=0, microsecond=0)

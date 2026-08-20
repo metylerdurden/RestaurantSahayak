@@ -12,7 +12,6 @@ from datetime import timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 
 from app.agents.analytics_agent import AnalyticsAgent
 from app.agents.customer_agent import CustomerAgent
@@ -22,7 +21,7 @@ from app.agents.reservation_agent import ReservationAgent
 from app.agents.staffing_agent import StaffingAgent
 from app.core.config import get_settings
 from app.llm.factory import build_llm_provider
-from app.models import AgentRun, Reservation
+from app.models import Reservation
 from app.repositories.agent_run_repo import AgentRunRepository
 from app.repositories.analytics_repo import AnalyticsRepository
 from app.repositories.approval_repo import ApprovalRepository
@@ -61,7 +60,13 @@ from app.tools.staffing_tools import (
     GetStaffScheduleTool,
 )
 from app.workflows.daily_briefing_workflow import DailyBriefingWorkflow
-from tests.integration.factories import make_customer, make_inventory_item, make_restaurant, make_staff, make_table, make_user
+from tests.integration.factories import (
+    make_customer,
+    make_inventory_item,
+    make_restaurant,
+    make_staff,
+    make_table,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,8 +94,10 @@ def _build_orchestrator(db_session, llm) -> OrchestratorAgent:
         "reservation": ReservationAgent(
             llm=llm,
             tools=[
-                GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-                CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
+                GetReservationsTool(reservation_service),
+                FindAvailableTableTool(reservation_service),
+                CreateReservationTool(reservation_service),
+                ModifyReservationTool(reservation_service),
                 CancelReservationTool(reservation_service),
             ],
             agent_run_service=agent_run_service,
@@ -98,15 +105,18 @@ def _build_orchestrator(db_session, llm) -> OrchestratorAgent:
         "inventory": InventoryAgent(
             llm=llm,
             tools=[
-                GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-                CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+                GetInventoryTool(inventory_service),
+                CheckStockTool(inventory_service),
+                CalculateRequiredInventoryTool(inventory_service),
+                CreatePurchaseRequestTool(inventory_service),
             ],
             agent_run_service=agent_run_service,
         ),
         "staffing": StaffingAgent(
             llm=llm,
             tools=[
-                GetStaffScheduleTool(staffing_service), GetStaffAvailabilityTool(staffing_service),
+                GetStaffScheduleTool(staffing_service),
+                GetStaffAvailabilityTool(staffing_service),
                 CalculateStaffRequirementTool(staffing_service),
             ],
             agent_run_service=agent_run_service,
@@ -114,14 +124,19 @@ def _build_orchestrator(db_session, llm) -> OrchestratorAgent:
         "customer": CustomerAgent(
             llm=llm,
             tools=[
-                GetCustomerTool(customer_service), GetCustomerHistoryTool(customer_service),
+                GetCustomerTool(customer_service),
+                GetCustomerHistoryTool(customer_service),
                 UpdateCustomerTool(customer_service),
             ],
             agent_run_service=agent_run_service,
         ),
         "analytics": AnalyticsAgent(
             llm=llm,
-            tools=[GetDailySalesTool(analytics_service), GetItemSalesTool(analytics_service), GetNoShowRateTool(analytics_service)],
+            tools=[
+                GetDailySalesTool(analytics_service),
+                GetItemSalesTool(analytics_service),
+                GetNoShowRateTool(analytics_service),
+            ],
             agent_run_service=agent_run_service,
         ),
     }
@@ -130,7 +145,6 @@ def _build_orchestrator(db_session, llm) -> OrchestratorAgent:
 
 async def test_daily_briefing_workflow_runs_end_to_end_with_the_real_model(db_session, llm):
     restaurant = await make_restaurant(db_session)
-    user = await make_user(db_session, restaurant)
     customer = await make_customer(db_session, restaurant)
     table = await make_table(db_session, restaurant, seat_capacity=4)
     await make_staff(db_session, restaurant, role="server", name="Alex")
@@ -139,8 +153,13 @@ async def test_daily_briefing_workflow_runs_end_to_end_with_the_real_model(db_se
     tonight = (utcnow() + timedelta(days=1)).replace(hour=19, minute=0, second=0, microsecond=0)
     db_session.add(
         Reservation(
-            restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=4,
-            requested_time=tonight, status="booked", created_via="manager_request",
+            restaurant_id=restaurant.id,
+            customer_id=customer.id,
+            table_id=table.id,
+            party_size=4,
+            requested_time=tonight,
+            status="booked",
+            created_via="manager_request",
         )
     )
     await db_session.flush()

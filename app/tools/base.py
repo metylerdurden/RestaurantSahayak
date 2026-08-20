@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.telemetry import get_tracer, start_span
 
@@ -88,11 +88,7 @@ class Tool(ABC, Generic[InputT, OutputT]):
     async def __call__(
         self, raw_input: dict[str, Any] | BaseModel, *, context: ToolContext
     ) -> OutputT | PendingApprovalOutput:
-        validated = (
-            raw_input
-            if isinstance(raw_input, self.input_model)
-            else self.input_model.model_validate(raw_input)
-        )
+        validated = raw_input if isinstance(raw_input, self.input_model) else self.input_model.model_validate(raw_input)
         with start_span(
             _tracer,
             "tool.call",

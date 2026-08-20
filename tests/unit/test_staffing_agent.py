@@ -28,9 +28,7 @@ from app.tools.staffing_tools import (
 )
 
 RESTAURANT_ID = uuid.uuid4()
-WINDOW_START = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
-    hour=18, minute=0, second=0, microsecond=0
-)
+WINDOW_START = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
 WINDOW_END = WINDOW_START + timedelta(hours=4)
 
 
@@ -104,21 +102,29 @@ def tools(staffing_service):
 
 def _schedule_call(shifts_with_assignments):
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(
-            id="c0", name="get_staff_schedule",
-            arguments={"date_from": WINDOW_START.isoformat(), "date_to": WINDOW_END.isoformat()},
-        )],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(
+                id="c0",
+                name="get_staff_schedule",
+                arguments={"date_from": WINDOW_START.isoformat(), "date_to": WINDOW_END.isoformat()},
+            )
+        ],
     )
 
 
 def _requirement_call():
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(
-            id="c1", name="calculate_staff_requirement",
-            arguments={"start_at": WINDOW_START.isoformat(), "end_at": WINDOW_END.isoformat()},
-        )],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(
+                id="c1",
+                name="calculate_staff_requirement",
+                arguments={"start_at": WINDOW_START.isoformat(), "end_at": WINDOW_END.isoformat()},
+            )
+        ],
     )
 
 
@@ -127,7 +133,8 @@ def _availability_call(role: str | None = None):
     if role:
         args["role"] = role
     return LLMResponse(
-        content="", model="fake-model",
+        content="",
+        model="fake-model",
         tool_calls=[ToolCall(id="c2", name="get_staff_availability", arguments=args)],
     )
 
@@ -149,7 +156,9 @@ async def test_normal_staffing_is_reported_as_adequate(agent_run_service, tools,
     responses = [
         _schedule_call(None),
         _requirement_call(),
-        LLMResponse(content="Friday 6-10pm is adequately staffed: 2 servers scheduled, 2 required.", model="fake-model"),
+        LLMResponse(
+            content="Friday 6-10pm is adequately staffed: 2 servers scheduled, 2 required.", model="fake-model"
+        ),
     ]
     agent = StaffingAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
 
@@ -187,7 +196,9 @@ async def test_understaffing_triggers_availability_lookup_and_recommendation(
 
     assert result.status == "completed"
     assert [tc.tool_name for tc in result.tool_calls] == [
-        "get_staff_schedule", "calculate_staff_requirement", "get_staff_availability",
+        "get_staff_schedule",
+        "calculate_staff_requirement",
+        "get_staff_availability",
     ]
     assert "priya" in result.summary.lower()
     assert "3 more" in result.summary.lower() or "request 3" in result.summary.lower()
@@ -252,9 +263,7 @@ async def test_high_reservation_volume_scales_the_requirement(agent_run_service,
 
 
 @pytest.mark.asyncio
-async def test_missing_staff_data_is_reported_plainly_not_fabricated(
-    agent_run_service, tools, staffing_service
-):
+async def test_missing_staff_data_is_reported_plainly_not_fabricated(agent_run_service, tools, staffing_service):
     staffing_service.get_staff_schedule.return_value = []  # no shifts scheduled at all
     staffing_service.calculate_staff_requirement.return_value = (18, 2, 1, 1, 4)
     staffing_service.get_staff_availability.return_value = []  # no staff free either
@@ -301,4 +310,6 @@ async def test_recommendation_is_grounded_in_the_tool_output(agent_run_service, 
     # the last tool call's output is exactly what data the agent had to work with.
     assert result.data is not None
     assert result.data["available_staff"][0]["name"] in {"Priya", "Jo"}
-    assert any(tc.tool_name == "calculate_staff_requirement" and tc.output["required_total"] == 7 for tc in result.tool_calls)
+    assert any(
+        tc.tool_name == "calculate_staff_requirement" and tc.output["required_total"] == 7 for tc in result.tool_calls
+    )

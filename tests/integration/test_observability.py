@@ -15,7 +15,7 @@ from asgi_lifespan import LifespanManager
 
 import app.api.stack as stack_module
 from app.api.deps import get_db_session
-from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
+from app.llm.base import LLMProvider, LLMResponse, ToolCall
 from app.main import create_app
 from tests.integration.factories import make_restaurant, make_staff
 
@@ -56,7 +56,9 @@ class FakeEmbeddingProvider:
 
 
 def _tool_call(call_id: str, name: str, arguments: dict) -> LLMResponse:
-    return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)])
+    return LLMResponse(
+        content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)]
+    )
 
 
 def _final(text: str) -> LLMResponse:
@@ -65,11 +67,17 @@ def _final(text: str) -> LLMResponse:
 
 @pytest.fixture
 async def client(db_session, monkeypatch):
-    scripted_llm = ScriptedLLM([
-        _tool_call("c0", "get_staff_schedule", {"date_from": "2026-01-01", "date_to": "2026-01-02"}),
-        _tool_call("c1", "calculate_staff_requirement", {"start_at": "2026-01-01T18:00:00+00:00", "end_at": "2026-01-01T22:00:00+00:00"}),
-        _final("Staffing looks adequate for the checked window."),
-    ])
+    scripted_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_staff_schedule", {"date_from": "2026-01-01", "date_to": "2026-01-02"}),
+            _tool_call(
+                "c1",
+                "calculate_staff_requirement",
+                {"start_at": "2026-01-01T18:00:00+00:00", "end_at": "2026-01-01T22:00:00+00:00"},
+            ),
+            _final("Staffing looks adequate for the checked window."),
+        ]
+    )
     monkeypatch.setattr(stack_module, "get_llm_provider", lambda: scripted_llm)
     monkeypatch.setattr(stack_module, "get_embedding_provider", lambda: FakeEmbeddingProvider())
 
@@ -103,8 +111,7 @@ async def test_triggering_a_workflow_over_http_produces_a_nested_trace(client, d
     # send") under the same route name — the request-level root span is the one
     # carrying the route's own "http.route" attribute.
     http_root_spans = [
-        s for s in otel_spans.get_finished_spans()
-        if s.name.startswith("POST") and "http.route" in s.attributes
+        s for s in otel_spans.get_finished_spans() if s.name.startswith("POST") and "http.route" in s.attributes
     ]
     assert http_root_spans, "FastAPIInstrumentor should have created a root span for the request"
     assert http_root_spans[0].attributes.get("correlation_id") == "test-correlation-abc"

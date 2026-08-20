@@ -51,7 +51,5 @@ async def get_customer_memories(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MemoryDTO]:
     stack = build_agent_stack(session)
-    memories = await stack.memory_service.list_customer_memories(
-        restaurant_id=restaurant_id, customer_id=customer_id
-    )
+    memories = await stack.memory_service.list_customer_memories(restaurant_id=restaurant_id, customer_id=customer_id)
     return [MemoryDTO.model_validate(m) for m in memories]

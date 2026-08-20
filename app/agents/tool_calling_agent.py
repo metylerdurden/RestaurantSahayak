@@ -27,7 +27,8 @@ from app.agents.state import AgentErrorInfo, AgentResult, AgentState, ToolCallRe
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.telemetry import get_tracer, start_span
-from app.llm.base import LLMMessage, LLMProvider, ToolCall as LLMToolCall
+from app.llm.base import LLMMessage, LLMProvider
+from app.llm.base import ToolCall as LLMToolCall
 from app.services.agent_run_service import AgentRunService
 from app.tools.base import Tool, ToolContext, ToolError, ToolErrorOutput, utcnow
 
@@ -118,11 +119,19 @@ class ToolCallingAgent:
             latency_ms = int((time.monotonic() - started_at) * 1000)
             summary = state.final_content or (state.error.message if state.error else "No result produced.")
 
-            await self.agent_run_service.complete_run(
-                run_id=run.id,
-                status="completed" if status != "error" else "failed",
-                outcome_summary=summary,
-            )
+            try:
+                # Best-effort: persisting the final AgentRun status must never stop
+                # handle() from returning a result to its caller — this method's own
+                # contract (see docstring) is that it always returns, and the
+                # AgentResult built below is already correct even if this write fails
+                # (e.g. the database became unreachable partway through the run).
+                await self.agent_run_service.complete_run(
+                    run_id=run.id,
+                    status="completed" if status != "error" else "failed",
+                    outcome_summary=summary,
+                )
+            except Exception as exc:
+                log.error("agent.completion_recording_failed", error=str(exc), exc_info=True)
             log.info("agent.finished", status=status, latency_ms=latency_ms, tool_calls=len(state.tool_calls))
 
             span.set_attribute("success", status != "error")
@@ -174,9 +183,7 @@ class ToolCallingAgent:
                 )
                 return self._final_status(state)
 
-            messages.append(
-                LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls)
-            )
+            messages.append(LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls))
             await self.agent_run_service.log_message(
                 run_id=run_id,
                 role="assistant",
@@ -187,7 +194,9 @@ class ToolCallingAgent:
             )
 
             for call in response.tool_calls:
-                await self._execute_tool_call(call, state=state, messages=messages, context=context, run_id=run_id, log=log)
+                await self._execute_tool_call(
+                    call, state=state, messages=messages, context=context, run_id=run_id, log=log
+                )
 
         state.error = AgentErrorInfo(
             code="max_iterations_exceeded",
@@ -224,12 +233,19 @@ class ToolCallingAgent:
             except ValidationError as exc:
                 error = ToolErrorOutput(code="invalid_arguments", message=str(exc))
                 log.warning("agent.invalid_arguments", tool_name=call.name)
+            except Exception as exc:
+                # An unexpected failure below the typed-tool boundary (e.g. a
+                # database connectivity issue) — surfaced as a structured error
+                # like any other tool failure, rather than aborting the entire
+                # run on a single possibly-transient hiccup. The LLM only ever
+                # sees an honest "this failed" message here — never a fabricated
+                # result — and the full exception is still logged for operators.
+                error = ToolErrorOutput(code="internal_tool_error", message="The tool failed unexpectedly.")
+                log.error("agent.tool_unexpected_error", tool_name=call.name, error=str(exc), exc_info=True)
             else:
                 result = output.model_dump(mode="json")
                 state.tool_calls.append(ToolCallRecord(tool_name=call.name, input=call.arguments, output=result))
-                messages.append(
-                    LLMMessage(role="tool", content=json.dumps({"tool": call.name, "result": result}))
-                )
+                messages.append(LLMMessage(role="tool", content=json.dumps({"tool": call.name, "result": result})))
                 await self.agent_run_service.log_message(
                     run_id=run_id,
                     role="tool_result",
@@ -238,9 +254,7 @@ class ToolCallingAgent:
                 )
                 return
 
-        messages.append(
-            LLMMessage(role="tool", content=json.dumps({"tool": call.name, "error": error.model_dump()}))
-        )
+        messages.append(LLMMessage(role="tool", content=json.dumps({"tool": call.name, "error": error.model_dump()})))
         await self.agent_run_service.log_message(
             run_id=run_id, role="tool_result", tool_name=call.name, content={"error": error.model_dump()}
         )

@@ -36,10 +36,37 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# A deliberately modest, real rule set — pyflakes (genuine bugs: unused imports/
+# vars, undefined names), pycodestyle (E/W), isort (I). Not flake8-bugbear/pyupgrade/
+# ruff's own opinionated extras: B008 in particular false-positives on FastAPI's
+# `Depends(...)` default-argument pattern used throughout this codebase, and the
+# broad `except Exception` clauses flagged by BLE001 are deliberate (see Step 20
+# reliability hardening) rather than bugs to "fix."
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+# Pragmatic, not --strict: this codebase uses type hints throughout but was not
+# written against mypy's strict mode from day one. Flags real errors (wrong
+# argument types, missing attributes, unreachable code) without demanding the
+# large, separate effort a full strict-mode migration would be.
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+
 [dependency-groups]
 dev = [
     "asgi-lifespan>=2.1.0",
+    "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
+    "ruff>=0.16.3",
 ]

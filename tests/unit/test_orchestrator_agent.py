@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.agents.orchestrator_agent import OrchestratorAgent
-from app.agents.state import AgentResult, ToolCallRecord
+from app.agents.state import AgentResult
 from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
 from app.repositories.agent_run_repo import AgentRunRepository
 from app.services.agent_run_service import AgentRunService
@@ -70,13 +70,26 @@ class ScriptedLLM(LLMProvider):
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
     )
 
 
 def _finish(call_id: str = "finish") -> LLMResponse:
     return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name="finish", arguments={})])
+
+
+def _identify_domains(*domains: str) -> LLMResponse:
+    """The first LLM call of every orchestrator run: _identify_scope_node asking
+    which domains are essential, before any delegation happens."""
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
+    )
 
 
 def _final(text: str) -> LLMResponse:
@@ -105,6 +118,7 @@ def agent_run_service():
 async def test_single_specialist_delegation_and_combine(agent_run_service):
     reservation = FakeSpecialist("reservation", [_result(summary="3 reservations tonight, 12 covers.")])
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "How many reservations are there tonight?"),
         _finish(),
         _final("We have 3 reservations tonight totaling 12 covers."),
@@ -123,6 +137,30 @@ async def test_single_specialist_delegation_and_combine(agent_run_service):
 
 
 @pytest.mark.asyncio
+async def test_handle_never_raises_even_if_recording_completion_fails(agent_run_service):
+    """Step 20 reliability hardening: persisting the final AgentRun status (a
+    database write) must never stop handle() from returning a coherent
+    OrchestratorResult to its caller — e.g. if the database became unreachable
+    right at the end of an otherwise-successful run."""
+    agent_run_service.complete_run = AsyncMock(side_effect=RuntimeError("database unreachable"))
+    reservation = FakeSpecialist("reservation", [_result(summary="Nothing booked yet.")])
+    responses = [
+        _identify_domains("reservation"),
+        _delegate("c0", "reservation", "What's booked?"),
+        _finish(),
+        _final("Nothing booked yet tonight."),
+    ]
+    orchestrator = OrchestratorAgent(
+        llm=ScriptedLLM(responses), specialists={"reservation": reservation}, agent_run_service=agent_run_service
+    )
+
+    result = await orchestrator.handle("Are we ready for tonight?", restaurant_id=RESTAURANT_ID)  # must not raise
+
+    assert result.status == "completed"
+    assert result.summary == "Nothing booked yet tonight."
+
+
+@pytest.mark.asyncio
 async def test_multi_agent_readiness_check_invokes_several_specialists_in_sequence(agent_run_service):
     reservation = FakeSpecialist("reservation", [_result(summary="12 covers booked tonight across 3 reservations.")])
     inventory = FakeSpecialist("inventory", [_result(summary="All key items are in stock.")])
@@ -130,6 +168,7 @@ async def test_multi_agent_readiness_check_invokes_several_specialists_in_sequen
     analytics = FakeSpecialist("analytics", [_result(summary="Similar nights typically run smoothly.")])
 
     responses = [
+        _identify_domains("reservation", "inventory", "staffing"),
         _delegate("c0", "reservation", "What reservations do we have tonight?"),
         _delegate("c1", "inventory", "Do we have enough stock for tonight's expected covers?"),
         _delegate("c2", "staffing", "Are we staffed for tonight's dinner shift?"),
@@ -143,7 +182,10 @@ async def test_multi_agent_readiness_check_invokes_several_specialists_in_sequen
     orchestrator = OrchestratorAgent(
         llm=ScriptedLLM(responses),
         specialists={
-            "reservation": reservation, "inventory": inventory, "staffing": staffing, "analytics": analytics,
+            "reservation": reservation,
+            "inventory": inventory,
+            "staffing": staffing,
+            "analytics": analytics,
         },
         agent_run_service=agent_run_service,
     )
@@ -173,9 +215,11 @@ async def test_customer_result_is_used_to_inform_the_reservation_instruction(age
     reservation = FakeSpecialist("reservation", [_result(summary="Booked Raj a quiet table for Friday 8pm.")])
 
     responses = [
+        _identify_domains("customer", "reservation"),
         _delegate("c0", "customer", "Look up Raj and any known preferences."),
         _delegate(
-            "c1", "reservation",
+            "c1",
+            "reservation",
             "Book a table for Raj Patel for Friday at 8pm. He prefers a quiet table away from the kitchen.",
         ),
         _finish(),
@@ -201,15 +245,20 @@ async def test_pending_approval_pauses_the_graph_instead_of_finishing(agent_run_
     approval_id = uuid.uuid4()
     reservation = FakeSpecialist(
         "reservation",
-        [_result(
-            status="pending_approval",
-            summary="Cancelling this large party requires manager approval.",
-            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "..."},
-        )],
+        [
+            _result(
+                status="pending_approval",
+                summary="Cancelling this large party requires manager approval.",
+                data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "..."},
+            )
+        ],
     )
-    # Only one LLM turn should ever be consumed — the graph must pause at
-    # await_approval before decide() is called again.
-    responses = [_delegate("c0", "reservation", "Cancel the reservation for the party of 8.")]
+    # Only the scope call and one decide turn should ever be consumed — the graph
+    # must pause at await_approval before decide() is called again.
+    responses = [
+        _identify_domains("reservation"),
+        _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
+    ]
     approval_service = AsyncMock(spec=ApprovalService)
     orchestrator = OrchestratorAgent(
         llm=ScriptedLLM(responses),
@@ -233,12 +282,16 @@ async def test_resume_after_approval_executes_and_completes_the_workflow(agent_r
     approval_id = uuid.uuid4()
     reservation = FakeSpecialist(
         "reservation",
-        [_result(
-            status="pending_approval", summary="Needs approval.",
-            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
-        )],
+        [
+            _result(
+                status="pending_approval",
+                summary="Needs approval.",
+                data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+            )
+        ],
     )
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
         _finish(),
         _final("The cancellation was approved and executed."),
@@ -271,12 +324,16 @@ async def test_resume_after_rejection_does_not_execute(agent_run_service):
     approval_id = uuid.uuid4()
     reservation = FakeSpecialist(
         "reservation",
-        [_result(
-            status="pending_approval", summary="Needs approval.",
-            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
-        )],
+        [
+            _result(
+                status="pending_approval",
+                summary="Needs approval.",
+                data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+            )
+        ],
     )
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
         _finish(),
         _final("The manager rejected the cancellation; the reservation stands."),
@@ -307,20 +364,30 @@ async def test_pending_approval_without_approval_service_configured_errors_safel
     approval_id = uuid.uuid4()
     reservation = FakeSpecialist(
         "reservation",
-        [_result(
-            status="pending_approval", summary="Needs approval.",
-            data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
-        )],
+        [
+            _result(
+                status="pending_approval",
+                summary="Needs approval.",
+                data={"approval_id": str(approval_id), "status": "pending_approval", "summary": "Needs approval."},
+            )
+        ],
     )
-    responses = [_delegate("c0", "reservation", "Cancel the reservation for the party of 8.")]
+    responses = [
+        _identify_domains("reservation"),
+        _delegate("c0", "reservation", "Cancel the reservation for the party of 8."),
+    ]
     orchestrator = OrchestratorAgent(
-        llm=ScriptedLLM(responses), specialists={"reservation": reservation}, agent_run_service=agent_run_service,
+        llm=ScriptedLLM(responses),
+        specialists={"reservation": reservation},
+        agent_run_service=agent_run_service,
     )  # no approval_service
 
     paused = await orchestrator.handle("Cancel the party of 8's reservation.", restaurant_id=RESTAURANT_ID)
     assert paused.status == "pending_approval"
 
-    resumed = await orchestrator.resume(paused.orchestrator_run_id, decision="approved", decided_by_user_id=uuid.uuid4())
+    resumed = await orchestrator.resume(
+        paused.orchestrator_run_id, decision="approved", decided_by_user_id=uuid.uuid4()
+    )
     assert resumed.status == "error"
 
 
@@ -328,9 +395,13 @@ async def test_pending_approval_without_approval_service_configured_errors_safel
 async def test_failed_specialist_is_retried_once_then_accepted(agent_run_service):
     inventory = FakeSpecialist(
         "inventory",
-        [_result(status="error", summary="internal error"), _result(status="completed", summary="Stock levels look fine.")],
+        [
+            _result(status="error", summary="internal error"),
+            _result(status="completed", summary="Stock levels look fine."),
+        ],
     )
     responses = [
+        _identify_domains("inventory"),
         _delegate("c0", "inventory", "Check stock levels."),
         _finish(),
         _final("Stock levels look fine."),
@@ -353,6 +424,7 @@ async def test_specialist_still_failing_after_retry_is_reported_not_hidden(agent
         [_result(status="error", summary="internal error"), _result(status="error", summary="internal error")],
     )
     responses = [
+        _identify_domains("inventory"),
         _delegate("c0", "inventory", "Check stock levels."),
         _finish(),
         _final("I couldn't check inventory due to a repeated error."),
@@ -372,7 +444,8 @@ async def test_specialist_still_failing_after_retry_is_reported_not_hidden(agent
 async def test_max_delegations_guard_forces_combine_eventually(agent_run_service):
     reservation = FakeSpecialist("reservation", [_result(summary=f"call {i}") for i in range(10)])
     # The model keeps wanting to delegate again, forever — the guard must still stop it.
-    responses = [_delegate(f"c{i}", "reservation", f"task {i}") for i in range(10)]
+    responses = [_identify_domains("reservation")]
+    responses.extend(_delegate(f"c{i}", "reservation", f"task {i}") for i in range(10))
     responses.append(_final("Reached the delegation limit; here's what I found."))
     orchestrator = OrchestratorAgent(
         llm=ScriptedLLM(responses),
@@ -392,9 +465,13 @@ async def test_max_delegations_guard_forces_combine_eventually(agent_run_service
 async def test_unknown_agent_name_in_routing_decision_is_handled_safely(agent_run_service):
     reservation = FakeSpecialist("reservation", [])
     responses = [
+        _identify_domains(),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c0", name="delegate", arguments={"agent_name": "not_a_real_agent", "instruction": "x"})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(id="c0", name="delegate", arguments={"agent_name": "not_a_real_agent", "instruction": "x"})
+            ],
         ),
         _final("I don't have a specialist for that."),
     ]
@@ -423,10 +500,51 @@ async def test_orchestrator_returns_error_result_on_unexpected_failure(agent_run
             return False
 
     orchestrator = OrchestratorAgent(
-        llm=BoomLLM(), specialists={"reservation": FakeSpecialist("reservation", [])}, agent_run_service=agent_run_service
+        llm=BoomLLM(),
+        specialists={"reservation": FakeSpecialist("reservation", [])},
+        agent_run_service=agent_run_service,
     )
 
     result = await orchestrator.handle("Are we ready for tonight?", restaurant_id=RESTAURANT_ID)
 
     assert result.status == "error"
     assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_finish_is_forced_to_wait_until_every_required_domain_has_been_covered(agent_run_service):
+    """The deterministic completeness guarantee from _decide_node/_force_delegate:
+    even if the decide call keeps choosing finish() before every domain
+    _identify_scope_node marked essential has been consulted, the orchestrator must
+    not accept that finish() — it must override it and force delegation to the next
+    missing domain instead, until all of them are covered."""
+    reservation = FakeSpecialist("reservation", [_result(summary="3 reservations tonight.")])
+    inventory = FakeSpecialist("inventory", [_result(summary="Stock levels look fine.")])
+    staffing = FakeSpecialist("staffing", [_result(summary="Fully staffed tonight.")])
+
+    # The decide call tries to finish() every single time it's asked — it never once
+    # calls delegate() itself. If the orchestrator only trusted the model's own
+    # per-turn judgment, this would finish immediately with zero invocations.
+    responses = [
+        _identify_domains("reservation", "inventory", "staffing"),
+        _finish(),
+        _finish(),
+        _finish(),
+        _finish(),
+        _final("Tonight looks ready across the board."),
+    ]
+    orchestrator = OrchestratorAgent(
+        llm=ScriptedLLM(responses),
+        specialists={"reservation": reservation, "inventory": inventory, "staffing": staffing},
+        agent_run_service=agent_run_service,
+    )
+
+    result = await orchestrator.handle("Are we ready for tonight?", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "completed"
+    # All three required domains were forced in, in the order they were declared
+    # missing, despite the model never once calling delegate().
+    assert [inv.agent_name for inv in result.invocations] == ["reservation", "inventory", "staffing"]
+    assert len(reservation.calls) == 1
+    assert len(inventory.calls) == 1
+    assert len(staffing.calls) == 1

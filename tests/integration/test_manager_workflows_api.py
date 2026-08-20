@@ -17,8 +17,11 @@ pytestmark = pytest.mark.asyncio
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
     )
 
 
@@ -26,9 +29,18 @@ def _finish() -> LLMResponse:
     return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="f", name="finish", arguments={})])
 
 
+def _identify_domains(*domains: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
+    )
+
+
 async def test_trigger_daily_briefing(db_session, monkeypatch):
     restaurant = await make_restaurant(db_session)
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "What's booked tonight?"),
         final("Nothing booked yet."),
         _finish(),

@@ -48,10 +48,7 @@ class AnalyticsService:
     ) -> list[ItemSalesEntry]:
         start, end = _day_bounds(date_from, date_to)
         rows = await self.repo.item_sales(restaurant_id, start, end, limit)
-        return [
-            ItemSalesEntry(menu_item_id=row[0], name=row[1], quantity_sold=row[2], revenue=row[3])
-            for row in rows
-        ]
+        return [ItemSalesEntry(menu_item_id=row[0], name=row[1], quantity_sold=row[2], revenue=row[3]) for row in rows]
 
     async def get_no_show_rate(
         self, *, restaurant_id: uuid.UUID, date_from: date, date_to: date
@@ -61,9 +58,5 @@ class AnalyticsService:
         no_show_count = stats.get("no_show", 0)
         completed_count = stats.get("completed", 0)
         denominator = no_show_count + completed_count
-        rate = (
-            (Decimal(no_show_count) / Decimal(denominator)).quantize(Decimal("0.0001"))
-            if denominator > 0
-            else None
-        )
+        rate = (Decimal(no_show_count) / Decimal(denominator)).quantize(Decimal("0.0001")) if denominator > 0 else None
         return no_show_count, completed_count, rate

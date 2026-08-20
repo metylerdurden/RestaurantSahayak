@@ -9,14 +9,22 @@ startup, so this module can be imported cheaply everywhere it's needed.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.embeddings.base import EmbeddingProvider
+
+if TYPE_CHECKING:
+    # Type-checking only — the real import stays inside _ensure_loaded() so
+    # importing this module never requires torch unless an embedding is
+    # actually requested.
+    from sentence_transformers import SentenceTransformer
 
 
 class BGEEmbeddingProvider(EmbeddingProvider):
     def __init__(self, model_name: str, device: str = "cpu") -> None:
         self._model_name = model_name
         self._device = device
-        self._model = None  # lazy-loaded SentenceTransformer
+        self._model: SentenceTransformer | None = None  # lazy-loaded
         self._dimension: int | None = None
 
     @property
@@ -38,9 +46,7 @@ class BGEEmbeddingProvider(EmbeddingProvider):
         from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer(self._model_name, device=self._device)
-        get_dimension = getattr(
-            self._model, "get_embedding_dimension", self._model.get_sentence_embedding_dimension
-        )
+        get_dimension = getattr(self._model, "get_embedding_dimension", self._model.get_sentence_embedding_dimension)
         self._dimension = get_dimension()
 
     def embed(self, texts: list[str]) -> list[list[float]]:

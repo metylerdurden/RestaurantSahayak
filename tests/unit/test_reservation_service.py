@@ -21,9 +21,7 @@ RESTAURANT_ID = uuid.uuid4()
 
 
 def _settings() -> Settings:
-    return Settings(
-        database_url="postgresql+asyncpg://x:x@localhost/x", reservation_high_impact_party_size=6
-    )
+    return Settings(database_url="postgresql+asyncpg://x:x@localhost/x", reservation_high_impact_party_size=6)
 
 
 def _context(agent_run_id: uuid.UUID | None = None) -> ToolContext:

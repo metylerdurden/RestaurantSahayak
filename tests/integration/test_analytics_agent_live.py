@@ -47,15 +47,24 @@ def _tool_names(result) -> set[str]:
 
 async def _sale(db_session, restaurant, customer, table, item, *, quantity: int, when):
     reservation = Reservation(
-        restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=2,
-        requested_time=when, status="completed", created_via="manager_request",
+        restaurant_id=restaurant.id,
+        customer_id=customer.id,
+        table_id=table.id,
+        party_size=2,
+        requested_time=when,
+        status="completed",
+        created_via="manager_request",
     )
     db_session.add(reservation)
     await db_session.flush()
     db_session.add(
         Sale(
-            restaurant_id=restaurant.id, reservation_id=reservation.id, menu_item_id=item.id,
-            quantity=quantity, unit_price=item.price, sold_at=when,
+            restaurant_id=restaurant.id,
+            reservation_id=reservation.id,
+            menu_item_id=item.id,
+            quantity=quantity,
+            unit_price=item.price,
+            sold_at=when,
         )
     )
     await db_session.flush()
@@ -83,9 +92,7 @@ async def test_top_selling_item_question_is_grounded_in_real_data(db_session, ll
 
     item_sales_calls = [tc for tc in result.tool_calls if tc.tool_name == "get_item_sales"]
     assert item_sales_calls, result.summary
-    top_names_seen = {
-        entry["name"] for tc in item_sales_calls for entry in tc.output["items"] if tc.output["items"]
-    }
+    top_names_seen = {entry["name"] for tc in item_sales_calls for entry in tc.output["items"] if tc.output["items"]}
     assert "Lamb Souvlaki" in top_names_seen, top_names_seen
     # Whatever the model reports as the top seller, it must be the one the real data
     # actually supports — never a fabricated name.

@@ -13,14 +13,13 @@ from app.repositories.approval_repo import ApprovalRepository
 from app.repositories.inventory_repo import InventoryRepository
 from app.services.approval_service import ApprovalService
 from app.services.inventory_service import InventoryService
-from app.tools.base import PendingApprovalOutput, ToolContext, ToolError
+from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
 from app.tools.inventory_tools import (
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
     GetInventoryTool,
 )
-from app.tools.base import utcnow
 from tests.integration.factories import make_agent_run, make_inventory_item, make_restaurant, make_user
 
 pytestmark = pytest.mark.asyncio
@@ -53,9 +52,7 @@ async def test_check_stock_end_to_end(db_session):
     item = await make_inventory_item(db_session, restaurant, quantity_on_hand=3, low_stock_threshold=2)
     context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory")
 
-    output = await CheckStockTool(service)(
-        {"item_id": str(item.id), "required_quantity": "5"}, context=context
-    )
+    output = await CheckStockTool(service)({"item_id": str(item.id), "required_quantity": "5"}, context=context)
     assert output.sufficient is False
     assert output.shortfall == Decimal("2")
 
@@ -91,9 +88,7 @@ async def test_calculate_required_inventory_uses_real_transaction_history(db_ses
     await db_session.flush()
 
     context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory")
-    output = await CalculateRequiredInventoryTool(service)(
-        {"item_id": str(item.id), "days_ahead": 7}, context=context
-    )
+    output = await CalculateRequiredInventoryTool(service)({"item_id": str(item.id), "days_ahead": 7}, context=context)
     assert output.average_daily_usage == Decimal("1")
     assert output.lookback_days_used == 14
 

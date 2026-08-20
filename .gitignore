@@ -4,17 +4,42 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+build/
+dist/
 
 # Env / secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+
+# Test/coverage output
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Local database files (this project's real database is Postgres via Docker —
+# any of these would only appear from an accidental local/sqlite fallback)
+*.sqlite3
+*.db
+
+# Model caches (BGE-M3 downloads here if HF_HOME/sentence-transformers defaults
+# to a project-local path instead of the usual ~/.cache)
+.cache/
+models/
 
 # Docker
 docker-compose.override.yml

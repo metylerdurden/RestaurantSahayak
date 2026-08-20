@@ -41,7 +41,12 @@ class InventoryService:
         self.event_bus = event_bus
 
     async def _publish(
-        self, event_type: str, *, restaurant_id: uuid.UUID, entity_id: uuid.UUID, payload: dict[str, Any],
+        self,
+        event_type: str,
+        *,
+        restaurant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        payload: dict[str, Any],
         correlation_id: uuid.UUID | None,
     ) -> None:
         if self.event_bus is None:
@@ -104,12 +109,8 @@ class InventoryService:
         since = utcnow() - timedelta(days=lookback_days)
         transactions = await self.repo.list_transactions_since(item_id, since)
 
-        total_consumed = sum(
-            (-t.quantity_delta for t in transactions if t.quantity_delta < 0), Decimal(0)
-        )
-        average_daily_usage = (
-            (Decimal(total_consumed) / Decimal(lookback_days)) if lookback_days > 0 else Decimal(0)
-        )
+        total_consumed = sum((-t.quantity_delta for t in transactions if t.quantity_delta < 0), Decimal(0))
+        average_daily_usage = (Decimal(total_consumed) / Decimal(lookback_days)) if lookback_days > 0 else Decimal(0)
         projected_quantity_at_horizon = item.quantity_on_hand - average_daily_usage * days_ahead
 
         # Recommend enough to bring the projected quantity back up to a 2x-threshold
@@ -137,8 +138,7 @@ class InventoryService:
         await self._get_item_or_raise(restaurant_id, item_id)
 
         high_impact = (
-            estimated_cost is not None
-            and estimated_cost >= self.settings.purchase_request_high_impact_cost_threshold
+            estimated_cost is not None and estimated_cost >= self.settings.purchase_request_high_impact_cost_threshold
         )
 
         if high_impact:
@@ -220,8 +220,6 @@ class InventoryService:
         purchase_request_id = uuid.UUID(approval.parameters["purchase_request_id"])
         purchase_request = await self.repo.get_purchase_request(purchase_request_id)
         if purchase_request is None:
-            raise ToolError(
-                "purchase_request_not_found", f"No purchase request found with id {purchase_request_id}"
-            )
+            raise ToolError("purchase_request_not_found", f"No purchase request found with id {purchase_request_id}")
         purchase_request.status = "approved"
         return await self.repo.save_purchase_request(purchase_request)

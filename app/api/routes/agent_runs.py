@@ -1,13 +1,13 @@
 """Manager API (Step 19): Agents / Agent Activity surface.
 
-    POST /api/v1/agent-runs             -> ask the orchestrator (or one named
-                                            specialist) something, right now, and
-                                            wait for the result
-    GET  /api/v1/agent-runs             -> recent runs for a restaurant
-    GET  /api/v1/agent-runs/{id}        -> one run's own record
-    GET  /api/v1/agent-runs/{id}/trace  -> the full nested trace for the Agent
-                                            Activity view: Orchestrator -> Specialist
-                                            -> Tool/Memory -> Result
+POST /api/v1/agent-runs             -> ask the orchestrator (or one named
+                                        specialist) something, right now, and
+                                        wait for the result
+GET  /api/v1/agent-runs             -> recent runs for a restaurant
+GET  /api/v1/agent-runs/{id}        -> one run's own record
+GET  /api/v1/agent-runs/{id}/trace  -> the full nested trace for the Agent
+                                        Activity view: Orchestrator -> Specialist
+                                        -> Tool/Memory -> Result
 """
 
 from __future__ import annotations

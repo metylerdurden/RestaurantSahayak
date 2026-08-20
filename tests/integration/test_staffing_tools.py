@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.models import StaffShift, ShiftAssignment
+from app.models import ShiftAssignment, StaffShift
 from app.repositories.staffing_repo import StaffingRepository
 from app.services.staffing_service import StaffingService
 from app.tools.base import ToolContext, utcnow
@@ -60,7 +60,7 @@ async def test_get_staff_schedule_includes_assignments(db_session):
 async def test_get_staff_availability_excludes_assigned_staff(db_session):
     service = await _build(db_session)
     restaurant = await make_restaurant(db_session)
-    free_staff = await make_staff(db_session, restaurant, role="server", name="Free")
+    await make_staff(db_session, restaurant, role="server", name="Free")
     busy_staff = await make_staff(db_session, restaurant, role="server", name="Busy")
     start = utcnow() + timedelta(days=1)
     shift = StaffShift(
@@ -85,8 +85,8 @@ async def test_get_staff_availability_excludes_assigned_staff(db_session):
 
 
 async def test_calculate_staff_requirement_from_real_reservations(db_session):
-    from tests.integration.factories import make_customer, make_table
     from app.models import Reservation
+    from tests.integration.factories import make_customer, make_table
 
     service = await _build(db_session)
     restaurant = await make_restaurant(db_session)

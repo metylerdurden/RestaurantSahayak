@@ -37,6 +37,18 @@ class FinishDecision(BaseModel):
     pass
 
 
+class RequiredDomainsDecision(BaseModel):
+    """The orchestrator's own up-front judgment (still real LLM reasoning, not a
+    hardcoded rule) of which specialist domains are essential to consult before a
+    request can be answered completely — e.g. a broad readiness question needs
+    reservation+inventory+staffing, while "book Raj for Friday" needs only
+    customer+reservation. Captured once, before any specialist result exists, so a
+    later per-turn "do I have enough now?" judgment (prone to premature
+    satisfaction — see _decide_node) can't quietly narrow the requirement."""
+
+    domains: list[SpecialistName] = Field(default_factory=list)
+
+
 # --- LangGraph state ---
 
 
@@ -56,6 +68,9 @@ class OrchestratorGraphState(TypedDict):
     orchestrator_run_id: str
     correlation_id: str
     invocations: Annotated[list[SpecialistInvocationState], operator.add]
+    # Set once, by _identify_scope_node, before any delegation happens. _decide_node
+    # will not allow finish() until every one of these has at least one invocation.
+    required_domains: list[str]
     remaining_steps: int
     next_agent: str | None
     next_instruction: str | None

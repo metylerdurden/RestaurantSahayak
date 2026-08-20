@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import asyncio
 
-from alembic import command
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from alembic import command
 from app.core.config import get_settings
 from app.models import Base
 from tests.conftest import _alembic_config
@@ -44,6 +44,4 @@ def test_migration_round_trip(_migrated_test_db):
     command.upgrade(cfg, "head")
     tables_after = asyncio.run(_table_names())
     expected_tables = set(Base.metadata.tables.keys())
-    assert expected_tables.issubset(tables_after), (
-        f"Missing tables after re-upgrade: {expected_tables - tables_after}"
-    )
+    assert expected_tables.issubset(tables_after), f"Missing tables after re-upgrade: {expected_tables - tables_after}"

@@ -34,9 +34,7 @@ class CustomerRepository(BaseRepository):
         )
         return list((await self.session.execute(stmt)).scalars().all())
 
-    async def list_reservation_history(
-        self, customer_id: uuid.UUID, *, limit: int = 20
-    ) -> list[Reservation]:
+    async def list_reservation_history(self, customer_id: uuid.UUID, *, limit: int = 20) -> list[Reservation]:
         stmt = (
             select(Reservation)
             .where(Reservation.customer_id == customer_id)

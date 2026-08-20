@@ -11,14 +11,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
 
 from app.agents.customer_agent import CustomerAgent
 from app.agents.inventory_agent import InventoryAgent
 from app.agents.orchestrator_agent import OrchestratorAgent
 from app.agents.reservation_agent import ReservationAgent
 from app.agents.staffing_agent import StaffingAgent
-from sqlalchemy import select
-
 from app.core.config import get_settings
 from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
 from app.models import AgentRun, Reservation, ShiftAssignment, StaffShift
@@ -84,7 +83,9 @@ class ScriptedLLM(LLMProvider):
 
 
 def _tool_call(call_id: str, name: str, arguments: dict) -> LLMResponse:
-    return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)])
+    return LLMResponse(
+        content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)]
+    )
 
 
 def _final(text: str) -> LLMResponse:
@@ -93,8 +94,11 @@ def _final(text: str) -> LLMResponse:
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
     )
 
 
@@ -102,12 +106,20 @@ def _finish(call_id: str = "finish") -> LLMResponse:
     return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name="finish", arguments={})])
 
 
+def _identify_domains(*domains: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
+    )
+
+
 async def test_readiness_check_combines_reservation_inventory_and_staffing(db_session):
     restaurant = await make_restaurant(db_session)
     user = await make_user(db_session, restaurant)
     customer = await make_customer(db_session, restaurant)
     table = await make_table(db_session, restaurant, seat_capacity=4)
-    olive_oil = await make_inventory_item(db_session, restaurant, name="Olive Oil", quantity_on_hand=40, low_stock_threshold=10)
+    await make_inventory_item(db_session, restaurant, name="Olive Oil", quantity_on_hand=40, low_stock_threshold=10)
 
     tonight_start = (utcnow()).replace(hour=18, minute=0, second=0, microsecond=0)
     tonight_end = tonight_start + timedelta(hours=4)
@@ -117,14 +129,22 @@ async def test_readiness_check_combines_reservation_inventory_and_staffing(db_se
 
     db_session.add(
         Reservation(
-            restaurant_id=restaurant.id, customer_id=customer.id, table_id=table.id, party_size=4,
-            requested_time=tonight_start + timedelta(minutes=30), status="booked", created_via="manager_request",
+            restaurant_id=restaurant.id,
+            customer_id=customer.id,
+            table_id=table.id,
+            party_size=4,
+            requested_time=tonight_start + timedelta(minutes=30),
+            status="booked",
+            created_via="manager_request",
         )
     )
     server = await make_staff(db_session, restaurant, role="server", name="Alex")
     shift = StaffShift(
-        restaurant_id=restaurant.id, start_at=tonight_start, end_at=tonight_end,
-        required_staff_count=1, status="staffed",
+        restaurant_id=restaurant.id,
+        start_at=tonight_start,
+        end_at=tonight_end,
+        required_staff_count=1,
+        status="staffed",
     )
     db_session.add(shift)
     await db_session.flush()
@@ -140,50 +160,74 @@ async def test_readiness_check_combines_reservation_inventory_and_staffing(db_se
     staffing_service = StaffingService(StaffingRepository(db_session), get_settings())
     agent_run_service = AgentRunService(AgentRunRepository(db_session))
 
-    reservation_llm = ScriptedLLM([
-        _tool_call("c0", "get_reservations", {}),
-        _final("There are 4 covers booked tonight across 1 reservation."),
-    ])
+    reservation_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_reservations", {}),
+            _final("There are 4 covers booked tonight across 1 reservation."),
+        ]
+    )
     reservation_agent = ReservationAgent(
         llm=reservation_llm,
-        tools=[GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-               CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
-               CancelReservationTool(reservation_service)],
+        tools=[
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
+            CancelReservationTool(reservation_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
-    inventory_llm = ScriptedLLM([
-        _tool_call("c0", "get_inventory", {}),
-        _final("All inventory items are adequately stocked, including Olive Oil at 40 liters."),
-    ])
+    inventory_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_inventory", {}),
+            _final("All inventory items are adequately stocked, including Olive Oil at 40 liters."),
+        ]
+    )
     inventory_agent = InventoryAgent(
         llm=inventory_llm,
-        tools=[GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-               CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service)],
+        tools=[
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
-    staffing_llm = ScriptedLLM([
-        _tool_call("c0", "get_staff_schedule", {"date_from": tonight_start.isoformat(), "date_to": tonight_start.isoformat()}),
-        _final("Tonight's shift has 1 server scheduled, which meets the requirement."),
-    ])
+    staffing_llm = ScriptedLLM(
+        [
+            _tool_call(
+                "c0",
+                "get_staff_schedule",
+                {"date_from": tonight_start.isoformat(), "date_to": tonight_start.isoformat()},
+            ),
+            _final("Tonight's shift has 1 server scheduled, which meets the requirement."),
+        ]
+    )
     staffing_agent = StaffingAgent(
         llm=staffing_llm,
-        tools=[GetStaffScheduleTool(staffing_service), GetStaffAvailabilityTool(staffing_service),
-               CalculateStaffRequirementTool(staffing_service)],
+        tools=[
+            GetStaffScheduleTool(staffing_service),
+            GetStaffAvailabilityTool(staffing_service),
+            CalculateStaffRequirementTool(staffing_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
-    orchestrator_llm = ScriptedLLM([
-        _delegate("o0", "reservation", "What reservations are booked for tonight?"),
-        _delegate("o1", "inventory", "Is inventory in good shape for tonight?"),
-        _delegate("o2", "staffing", "Are we staffed for tonight's shift?"),
-        _finish(),
-        _final(
-            "Tonight looks ready: 4 covers booked, inventory (including Olive Oil) is well stocked, "
-            "and the shift is staffed with 1 server as required."
-        ),
-    ])
+    orchestrator_llm = ScriptedLLM(
+        [
+            _identify_domains("reservation", "inventory", "staffing"),
+            _delegate("o0", "reservation", "What reservations are booked for tonight?"),
+            _delegate("o1", "inventory", "Is inventory in good shape for tonight?"),
+            _delegate("o2", "staffing", "Are we staffed for tonight's shift?"),
+            _finish(),
+            _final(
+                "Tonight looks ready: 4 covers booked, inventory (including Olive Oil) is well stocked, "
+                "and the shift is staffed with 1 server as required."
+            ),
+        ]
+    )
     orchestrator = OrchestratorAgent(
         llm=orchestrator_llm,
         specialists={"reservation": reservation_agent, "inventory": inventory_agent, "staffing": staffing_agent},
@@ -207,10 +251,10 @@ async def test_readiness_check_combines_reservation_inventory_and_staffing(db_se
     orchestrator_run = await run_repo.get_by_id(result.orchestrator_run_id)
     assert orchestrator_run is not None
     child_runs = (
-        await db_session.execute(
-            select(AgentRun).where(AgentRun.parent_run_id == result.orchestrator_run_id)
-        )
-    ).scalars().all()
+        (await db_session.execute(select(AgentRun).where(AgentRun.parent_run_id == result.orchestrator_run_id)))
+        .scalars()
+        .all()
+    )
     assert len(child_runs) == 3
     assert {r.agent_name for r in child_runs} == {"reservation", "inventory", "staffing"}
     assert all(r.correlation_id == orchestrator_run.correlation_id for r in child_runs)
@@ -229,40 +273,60 @@ async def test_book_raj_flow_chains_customer_memory_into_reservation(db_session)
     customer_service = CustomerService(CustomerRepository(db_session))
     agent_run_service = AgentRunService(AgentRunRepository(db_session))
 
-    customer_llm = ScriptedLLM([
-        _tool_call("c0", "get_customer", {"query": "Raj"}),
-        _final(f"Found Raj Patel (customer_id={raj.id}). No specific seating preference is on file."),
-    ])
+    customer_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_customer", {"query": "Raj"}),
+            _final(f"Found Raj Patel (customer_id={raj.id}). No specific seating preference is on file."),
+        ]
+    )
     customer_agent = CustomerAgent(
         llm=customer_llm,
-        tools=[GetCustomerTool(customer_service), GetCustomerHistoryTool(customer_service), UpdateCustomerTool(customer_service)],
+        tools=[
+            GetCustomerTool(customer_service),
+            GetCustomerHistoryTool(customer_service),
+            UpdateCustomerTool(customer_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
     friday = utcnow() + timedelta(days=(4 - utcnow().weekday()) % 7 + 1)
     friday_8pm = friday.replace(hour=20, minute=0, second=0, microsecond=0)
 
-    reservation_llm = ScriptedLLM([
-        _tool_call("c0", "create_reservation", {"customer_id": str(raj.id), "party_size": 2, "requested_time": friday_8pm.isoformat()}),
-        _final("Booked Raj Patel a table for Friday at 8pm."),
-    ])
+    reservation_llm = ScriptedLLM(
+        [
+            _tool_call(
+                "c0",
+                "create_reservation",
+                {"customer_id": str(raj.id), "party_size": 2, "requested_time": friday_8pm.isoformat()},
+            ),
+            _final("Booked Raj Patel a table for Friday at 8pm."),
+        ]
+    )
     reservation_agent = ReservationAgent(
         llm=reservation_llm,
-        tools=[GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-               CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
-               CancelReservationTool(reservation_service)],
+        tools=[
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
+            CancelReservationTool(reservation_service),
+        ],
         agent_run_service=agent_run_service,
     )
 
-    orchestrator_llm = ScriptedLLM([
-        _delegate("o0", "customer", "Look up Raj and any known preferences."),
-        _delegate(
-            "o1", "reservation",
-            f"Book a table for customer_id={raj.id} (Raj Patel) for Friday at 8pm, party of 2.",
-        ),
-        _finish(),
-        _final("Booked Raj Patel a table for Friday at 8pm."),
-    ])
+    orchestrator_llm = ScriptedLLM(
+        [
+            _identify_domains("customer", "reservation"),
+            _delegate("o0", "customer", "Look up Raj and any known preferences."),
+            _delegate(
+                "o1",
+                "reservation",
+                f"Book a table for customer_id={raj.id} (Raj Patel) for Friday at 8pm, party of 2.",
+            ),
+            _finish(),
+            _final("Booked Raj Patel a table for Friday at 8pm."),
+        ]
+    )
     orchestrator = OrchestratorAgent(
         llm=orchestrator_llm,
         specialists={"customer": customer_agent, "reservation": reservation_agent},

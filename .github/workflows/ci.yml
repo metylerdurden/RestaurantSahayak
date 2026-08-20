@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-typecheck:
+    name: Lint, format check, type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff lint
+        run: uv run ruff check app scripts tests
+
+      - name: Ruff format check
+        run: uv run ruff format --check app scripts tests
+
+      # Scoped to application code only (app/, scripts/) — the test suite is
+      # excluded deliberately: its ~160 mypy findings are overwhelmingly
+      # pytest-fixture/SQLAlchemy typing friction inherent to test code, not
+      # real bugs (see pyproject.toml's [tool.mypy] comment for the same note).
+      - name: mypy
+        run: uv run mypy app scripts
+
+  test:
+    name: Test suite (real Postgres + pgvector)
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: dineops_test
+          POSTGRES_USER: dineops
+          POSTGRES_PASSWORD: dineops_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dineops -d dineops_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://dineops:dineops_dev_password@localhost:5432/dineops_test
+      OTEL_EXPORTER: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run database migrations
+        run: uv run alembic upgrade head
+
+      # Live-model tests (filenames containing "live") exercise the real
+      # Qwen3-8B via Ollama and real BGE-M3 — neither is available in this
+      # runner, so they're excluded here exactly as local `-k "not live"` runs
+      # already do; they remain part of the suite for local/manual runs against
+      # a real Ollama instance.
+      - name: Run test suite (excludes live-model tests)
+        run: uv run pytest tests/ -q -k "not live"
+
+  build:
+    name: Docker build verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -f docker/Dockerfile -t dineops-api:ci .

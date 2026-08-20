@@ -30,9 +30,7 @@ class InventoryRepository(BaseRepository):
         stmt = stmt.order_by(InventoryItem.name)
         return list((await self.session.execute(stmt)).scalars().all())
 
-    async def list_transactions_since(
-        self, item_id: uuid.UUID, since: datetime
-    ) -> list[InventoryTransaction]:
+    async def list_transactions_since(self, item_id: uuid.UUID, since: datetime) -> list[InventoryTransaction]:
         stmt = (
             select(InventoryTransaction)
             .where(

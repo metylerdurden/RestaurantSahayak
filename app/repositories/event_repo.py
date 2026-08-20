@@ -19,9 +19,7 @@ class EventRepository(BaseRepository):
         return await self.session.get(Event, event_id)
 
     async def get_by_idempotency_key(self, restaurant_id: uuid.UUID, idempotency_key: str) -> Event | None:
-        stmt = select(Event).where(
-            Event.restaurant_id == restaurant_id, Event.idempotency_key == idempotency_key
-        )
+        stmt = select(Event).where(Event.restaurant_id == restaurant_id, Event.idempotency_key == idempotency_key)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_unhandled(self, restaurant_id: uuid.UUID) -> list[Event]:

@@ -19,11 +19,7 @@ class AgentRunRepository(BaseRepository):
         return await self.session.get(AgentRun, run_id)
 
     async def list_by_correlation_id(self, correlation_id: uuid.UUID) -> list[AgentRun]:
-        stmt = (
-            select(AgentRun)
-            .where(AgentRun.correlation_id == correlation_id)
-            .order_by(AgentRun.started_at)
-        )
+        stmt = select(AgentRun).where(AgentRun.correlation_id == correlation_id).order_by(AgentRun.started_at)
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_recent(
@@ -51,9 +47,5 @@ class AgentRunRepository(BaseRepository):
         return message
 
     async def list_messages(self, run_id: uuid.UUID) -> list[AgentMessage]:
-        stmt = (
-            select(AgentMessage)
-            .where(AgentMessage.run_id == run_id)
-            .order_by(AgentMessage.sequence_number)
-        )
+        stmt = select(AgentMessage).where(AgentMessage.run_id == run_id).order_by(AgentMessage.sequence_number)
         return list((await self.session.execute(stmt)).scalars().all())

@@ -108,9 +108,7 @@ async def test_get_update_reinforce_forget_delete_round_trip(db_session, embedde
     assert fetched.memory.id == memory_id
     assert fetched.memory.access_count == 1
 
-    updated = await UpdateMemoryTool(service)(
-        {"memory_id": str(memory_id), "importance": 5}, context=context
-    )
+    updated = await UpdateMemoryTool(service)({"memory_id": str(memory_id), "importance": 5}, context=context)
     assert updated.memory.importance == 5
 
     reinforced = await ReinforceMemoryTool(service)(

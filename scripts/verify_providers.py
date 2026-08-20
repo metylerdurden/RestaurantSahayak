@@ -14,15 +14,14 @@ import time
 
 from app.core.config import get_settings
 from app.embeddings.factory import get_embedding_provider
-from app.llm.factory import get_llm_provider
 from app.llm.base import LLMMessage
+from app.llm.factory import get_llm_provider
 
 
 async def verify_llm() -> bool:
     settings = get_settings()
     provider = get_llm_provider()
-    print(f"\n[LLM] provider={settings.llm_provider} model={provider.model_name} "
-          f"base_url={settings.ollama_base_url}")
+    print(f"\n[LLM] provider={settings.llm_provider} model={provider.model_name} base_url={settings.ollama_base_url}")
 
     print("[LLM] health_check() ...", end=" ", flush=True)
     healthy = await provider.health_check()
@@ -33,9 +32,7 @@ async def verify_llm() -> bool:
 
     print("[LLM] generate() a real completion ...", end=" ", flush=True)
     start = time.monotonic()
-    response = await provider.generate(
-        [LLMMessage(role="user", content="Reply with exactly the word: pong")]
-    )
+    response = await provider.generate([LLMMessage(role="user", content="Reply with exactly the word: pong")])
     elapsed = time.monotonic() - start
     print(f"OK ({elapsed:.1f}s)")
     print(f"[LLM] model={response.model!r} content={response.content!r}")
@@ -45,11 +42,16 @@ async def verify_llm() -> bool:
 def verify_embeddings() -> bool:
     settings = get_settings()
     provider = get_embedding_provider()
-    print(f"\n[EMBEDDING] provider={settings.embedding_provider} model={provider.model_name} "
-          f"device={settings.embedding_device}")
+    print(
+        f"\n[EMBEDDING] provider={settings.embedding_provider} model={provider.model_name} "
+        f"device={settings.embedding_device}"
+    )
 
-    print("[EMBEDDING] loading model + embedding a probe string (first run downloads "
-          "the model — may take a while) ...", end=" ", flush=True)
+    print(
+        "[EMBEDDING] loading model + embedding a probe string (first run downloads the model — may take a while) ...",
+        end=" ",
+        flush=True,
+    )
     start = time.monotonic()
     healthy = provider.health_check()
     elapsed = time.monotonic() - start
@@ -58,8 +60,7 @@ def verify_embeddings() -> bool:
         return False
 
     vectors = provider.embed(["The Patels prefer a window table.", "Reservation for 4 at 7pm."])
-    print(f"[EMBEDDING] dimension={provider.dimension} embedded {len(vectors)} texts, "
-          f"vector[0][:5]={vectors[0][:5]}")
+    print(f"[EMBEDDING] dimension={provider.dimension} embedded {len(vectors)} texts, vector[0][:5]={vectors[0][:5]}")
     return True
 
 

@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Minimal authorization boundary (Step 20 security hardening): when set, every
+    # /api/v1/* and /workflows/* request must carry a matching X-API-Key header —
+    # see app.api.security.require_api_key. Unset (the local-dev/test default) is
+    # a deliberate no-op: no auth/user-account system exists in this MVP (see
+    # app.models.user.User's own docstring), so this stays opt-in rather than
+    # breaking local development or the existing test suite. Set this before
+    # exposing the app anywhere reachable outside your own machine.
+    api_key: str | None = None
 
     # --- Database ---
     database_url: str = Field(
@@ -79,4 +87,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Process-wide cached Settings instance."""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

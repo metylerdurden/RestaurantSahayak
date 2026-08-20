@@ -79,9 +79,7 @@ def _build_agent(db_session, llm, embedder, *, max_iterations: int = 8) -> Custo
         ForgetMemoryTool(memory_service),
         DeleteMemoryTool(memory_service),
     ]
-    return CustomerAgent(
-        llm=llm, tools=tools, agent_run_service=agent_run_service, max_iterations=max_iterations
-    )
+    return CustomerAgent(llm=llm, tools=tools, agent_run_service=agent_run_service, max_iterations=max_iterations)
 
 
 def _tool_names(result) -> set[str]:
@@ -90,14 +88,18 @@ def _tool_names(result) -> set[str]:
 
 async def _active_customer_preference_texts(db_session, customer_id) -> list[str]:
     rows = (
-        await db_session.execute(
-            select(Memory).where(
-                Memory.customer_id == customer_id,
-                Memory.memory_type == "CUSTOMER_PREFERENCE",
-                Memory.is_active.is_(True),
+        (
+            await db_session.execute(
+                select(Memory).where(
+                    Memory.customer_id == customer_id,
+                    Memory.memory_type == "CUSTOMER_PREFERENCE",
+                    Memory.is_active.is_(True),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [str(m.content.get("text", "")).lower() for m in rows]
 
 
@@ -125,9 +127,7 @@ async def test_memory_persists_across_separate_agent_executions(db_session, llm,
         initiated_by_user_id=user.id,
     )
     assert result2.status != "error", result2.summary
-    assert "search_memory" in _tool_names(result2), (
-        "the second execution must retrieve memory, not answer from nothing"
-    )
+    assert "search_memory" in _tool_names(result2), "the second execution must retrieve memory, not answer from nothing"
 
     retrieved_texts = [
         str(r.get("memory", {}).get("content", {}).get("text", "")).lower()

@@ -20,7 +20,6 @@ from app.repositories.agent_run_repo import AgentRunRepository
 from app.services.agent_run_service import AgentRunService
 from app.tools.base import PendingApprovalOutput, Tool, ToolContext, ToolError
 
-
 # --- fake tools (isolated from the real reservation tools on purpose) ---
 
 
@@ -246,9 +245,7 @@ async def test_agent_bails_out_after_max_iterations(agent_run_service):
         for i in range(10)
     ]
     llm = ScriptedLLM(responses)
-    agent = ReservationAgent(
-        llm=llm, tools=[EchoTool()], agent_run_service=agent_run_service, max_iterations=3
-    )
+    agent = ReservationAgent(llm=llm, tools=[EchoTool()], agent_run_service=agent_run_service, max_iterations=3)
 
     result = await agent.handle("loop forever", restaurant_id=uuid.uuid4())
 
@@ -271,9 +268,7 @@ async def test_agent_reports_pending_approval_status(agent_run_service):
         LLMResponse(content="This needs manager approval before it happens.", model="fake-model"),
     ]
     llm = ScriptedLLM(responses)
-    agent = ReservationAgent(
-        llm=llm, tools=[ApprovalTool(approval_id)], agent_run_service=agent_run_service
-    )
+    agent = ReservationAgent(llm=llm, tools=[ApprovalTool(approval_id)], agent_run_service=agent_run_service)
 
     result = await agent.handle("cancel the big party", restaurant_id=uuid.uuid4())
 

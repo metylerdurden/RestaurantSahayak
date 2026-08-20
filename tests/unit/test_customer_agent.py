@@ -129,29 +129,32 @@ async def test_customer_agent_resolves_customer_then_creates_memory(
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
+            content="",
+            model="fake-model",
             tool_calls=[ToolCall(id="c0", name="get_customer", arguments={"query": "Raj"})],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(
-                id="c1", name="add_memory",
-                arguments={
-                    "memory_type": "CUSTOMER_PREFERENCE",
-                    "topic": "seating_preference",
-                    "content": {"text": "Prefers a quiet table away from the kitchen."},
-                    "source": "manager_stated",
-                    "customer_id": str(raj.id),
-                },
-            )],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="add_memory",
+                    arguments={
+                        "memory_type": "CUSTOMER_PREFERENCE",
+                        "topic": "seating_preference",
+                        "content": {"text": "Prefers a quiet table away from the kitchen."},
+                        "source": "manager_stated",
+                        "customer_id": str(raj.id),
+                    },
+                )
+            ],
         ),
         LLMResponse(content="Noted Raj's seating preference.", model="fake-model"),
     ]
     agent = CustomerAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
 
-    result = await agent.handle(
-        "Raj prefers a quiet table away from the kitchen.", restaurant_id=RESTAURANT_ID
-    )
+    result = await agent.handle("Raj prefers a quiet table away from the kitchen.", restaurant_id=RESTAURANT_ID)
 
     assert result.status == "completed"
     assert [tc.tool_name for tc in result.tool_calls] == ["get_customer", "add_memory"]
@@ -171,15 +174,20 @@ async def test_customer_agent_searches_memory_and_reports_findings(
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
+            content="",
+            model="fake-model",
             tool_calls=[ToolCall(id="c0", name="get_customer", arguments={"query": "Raj"})],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(
-                id="c1", name="search_memory",
-                arguments={"query": "seating preference", "customer_id": str(raj.id)},
-            )],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="search_memory",
+                    arguments={"query": "seating preference", "customer_id": str(raj.id)},
+                )
+            ],
         ),
         LLMResponse(content="Raj prefers a quiet table away from the kitchen.", model="fake-model"),
     ]
@@ -207,25 +215,34 @@ async def test_customer_agent_uses_update_memory_for_a_correction(
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
+            content="",
+            model="fake-model",
             tool_calls=[ToolCall(id="c0", name="get_customer", arguments={"query": "Raj"})],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(
-                id="c1", name="search_memory",
-                arguments={"query": "seating preference", "customer_id": str(raj.id)},
-            )],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="search_memory",
+                    arguments={"query": "seating preference", "customer_id": str(raj.id)},
+                )
+            ],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(
-                id="c2", name="update_memory",
-                arguments={
-                    "memory_id": str(existing.id),
-                    "content": {"text": "Prefers a quiet table, not the window."},
-                },
-            )],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c2",
+                    name="update_memory",
+                    arguments={
+                        "memory_id": str(existing.id),
+                        "content": {"text": "Prefers a quiet table, not the window."},
+                    },
+                )
+            ],
         ),
         LLMResponse(content="Updated Raj's seating preference.", model="fake-model"),
     ]

@@ -20,9 +20,9 @@ import uuid
 from sqlalchemy import select
 
 from app.api.stack import build_agent_stack
+from app.core.config import get_settings
 from app.core.db import get_engine, get_session_factory
 from app.core.logging import configure_logging
-from app.core.config import get_settings
 from app.core.telemetry import configure_telemetry, instrument_sqlalchemy, shutdown_telemetry
 from app.models import Restaurant
 from app.models.workflow_run import WORKFLOW_TYPES

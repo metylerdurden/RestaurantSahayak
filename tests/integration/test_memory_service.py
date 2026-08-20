@@ -5,7 +5,6 @@ otherwise force a reload every test)."""
 
 from __future__ import annotations
 
-import uuid
 from decimal import Decimal
 
 import pytest
@@ -77,9 +76,7 @@ async def test_add_memory_correction_deactivates_old_memory_and_creates_new_one(
     )
 
     assert corrected.id != original.id
-    reloaded_original = await service.get_memory(
-        restaurant_id=restaurant.id, memory_id=original.id, touch=False
-    )
+    reloaded_original = await service.get_memory(restaurant_id=restaurant.id, memory_id=original.id, touch=False)
     assert reloaded_original.is_active is False
     assert corrected.is_active is True
 
@@ -204,9 +201,7 @@ async def test_reinforce_memory_increases_confidence_and_tracks_access(db_sessio
         confidence=0.5,
     )
 
-    reinforced = await service.reinforce_memory(
-        restaurant_id=restaurant.id, memory_id=memory.id, confidence_step=0.2
-    )
+    reinforced = await service.reinforce_memory(restaurant_id=restaurant.id, memory_id=memory.id, confidence_step=0.2)
 
     assert reinforced.confidence == Decimal("0.7")
     assert reinforced.access_count == 1

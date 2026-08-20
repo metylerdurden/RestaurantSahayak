@@ -20,8 +20,11 @@ pytestmark = pytest.mark.asyncio
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
     )
 
 
@@ -29,11 +32,20 @@ def _finish() -> LLMResponse:
     return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="f", name="finish", arguments={})])
 
 
+def _identify_domains(*domains: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
+    )
+
+
 async def test_trigger_a_specialist_agent_directly(db_session, monkeypatch):
     restaurant = await make_restaurant(db_session)
     await make_user(db_session, restaurant)
     app = build_test_app(
-        db_session, monkeypatch,
+        db_session,
+        monkeypatch,
         responses=[tool_call("c0", "get_reservations", {}), final("No reservations found for that range.")],
     )
     async with LifespanManager(app):
@@ -53,6 +65,7 @@ async def test_trigger_orchestrator_delegates_and_the_trace_nests_correctly(db_s
     restaurant = await make_restaurant(db_session)
     user = await make_user(db_session, restaurant)
     responses = [
+        _identify_domains("reservation"),
         _delegate("c0", "reservation", "What is booked?"),
         tool_call("c1", "get_reservations", {}),
         final("Nothing booked yet."),
@@ -66,8 +79,10 @@ async def test_trigger_orchestrator_delegates_and_the_trace_nests_correctly(db_s
             trigger = await client.post(
                 "/api/v1/agent-runs",
                 json={
-                    "restaurant_id": str(restaurant.id), "agent_name": "orchestrator",
-                    "task": "Are we ready for tonight?", "initiated_by_user_id": str(user.id),
+                    "restaurant_id": str(restaurant.id),
+                    "agent_name": "orchestrator",
+                    "task": "Are we ready for tonight?",
+                    "initiated_by_user_id": str(user.id),
                 },
             )
             assert trigger.status_code == 200

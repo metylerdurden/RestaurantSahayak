@@ -32,8 +32,12 @@ RESTAURANT_ID = uuid.uuid4()
 
 def _item(**overrides):
     defaults = dict(
-        id=uuid.uuid4(), name="Olive Oil", unit="liter",
-        quantity_on_hand=Decimal("2"), low_stock_threshold=Decimal("10"), status="low",
+        id=uuid.uuid4(),
+        name="Olive Oil",
+        unit="liter",
+        quantity_on_hand=Decimal("2"),
+        low_stock_threshold=Decimal("10"),
+        status="low",
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -93,7 +97,12 @@ def test_inventory_agent_is_named_and_prompted_correctly(agent_run_service, tool
     agent = InventoryAgent(llm=ScriptedLLM([]), tools=tools, agent_run_service=agent_run_service)
     assert agent.name == "inventory"
     assert agent.system_prompt == INVENTORY_AGENT_SYSTEM_PROMPT
-    assert set(agent.tools) == {"get_inventory", "check_stock", "calculate_required_inventory", "create_purchase_request"}
+    assert set(agent.tools) == {
+        "get_inventory",
+        "check_stock",
+        "calculate_required_inventory",
+        "create_purchase_request",
+    }
 
 
 @pytest.mark.asyncio
@@ -101,13 +110,27 @@ async def test_low_stock_lookup_and_reorder_recommendation(agent_run_service, to
     item = _item(name="Olive Oil", status="low", quantity_on_hand=Decimal("2"), low_stock_threshold=Decimal("10"))
     inventory_service.get_inventory.return_value = [item]
     inventory_service.calculate_required_inventory.return_value = (
-        item, Decimal("1.5"), Decimal("-8.5"), Decimal("28.5"), 14,
+        item,
+        Decimal("1.5"),
+        Decimal("-8.5"),
+        Decimal("28.5"),
+        14,
     )
 
     responses = [
-        LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"status": "low"})]),
-        LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="c1", name="calculate_required_inventory", arguments={"item_id": str(item.id)})]),
-        LLMResponse(content="Olive Oil is low (2 liters on hand). Recommend ordering about 28.5 liters.", model="fake-model"),
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"status": "low"})],
+        ),
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c1", name="calculate_required_inventory", arguments={"item_id": str(item.id)})],
+        ),
+        LLMResponse(
+            content="Olive Oil is low (2 liters on hand). Recommend ordering about 28.5 liters.", model="fake-model"
+        ),
     ]
     agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
 
@@ -130,10 +153,21 @@ async def test_purchase_request_above_threshold_is_reported_as_pending_approval(
     )
 
     responses = [
-        LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"name_contains": "Olive Oil"})]),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c1", name="create_purchase_request", arguments={"item_id": str(item.id), "requested_quantity": "50", "estimated_cost": "500"})],
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"name_contains": "Olive Oil"})],
+        ),
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="create_purchase_request",
+                    arguments={"item_id": str(item.id), "requested_quantity": "50", "estimated_cost": "500"},
+                )
+            ],
         ),
         LLMResponse(content="This purchase request needs manager approval before it's placed.", model="fake-model"),
     ]
@@ -151,7 +185,11 @@ async def test_out_of_stock_item_reported_plainly(agent_run_service, tools, inve
     inventory_service.get_inventory.return_value = []
 
     responses = [
-        LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"status": "out_of_stock"})]),
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="get_inventory", arguments={"status": "out_of_stock"})],
+        ),
         LLMResponse(content="Nothing is currently marked out of stock.", model="fake-model"),
     ]
     agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)

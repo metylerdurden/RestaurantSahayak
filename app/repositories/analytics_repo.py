@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Row, func, select
 
 from app.models import MenuItem, Reservation, Sale
 from app.repositories.base import BaseRepository
@@ -17,9 +17,7 @@ COMPLETED_OR_NO_SHOW = ("completed", "no_show")
 
 
 class AnalyticsRepository(BaseRepository):
-    async def daily_sales(
-        self, restaurant_id: uuid.UUID, start: datetime, end: datetime
-    ) -> list[tuple]:
+    async def daily_sales(self, restaurant_id: uuid.UUID, start: datetime, end: datetime) -> list[Row]:
         stmt = (
             select(
                 func.date(Sale.sold_at).label("sales_date"),
@@ -32,9 +30,7 @@ class AnalyticsRepository(BaseRepository):
         )
         return list((await self.session.execute(stmt)).all())
 
-    async def covers_by_date(
-        self, restaurant_id: uuid.UUID, start: datetime, end: datetime
-    ) -> dict:
+    async def covers_by_date(self, restaurant_id: uuid.UUID, start: datetime, end: datetime) -> dict:
         stmt = (
             select(func.date(Reservation.requested_time), func.sum(Reservation.party_size))
             .where(
@@ -48,9 +44,7 @@ class AnalyticsRepository(BaseRepository):
         rows = (await self.session.execute(stmt)).all()
         return {row[0]: row[1] for row in rows}
 
-    async def item_sales(
-        self, restaurant_id: uuid.UUID, start: datetime, end: datetime, limit: int
-    ) -> list[tuple]:
+    async def item_sales(self, restaurant_id: uuid.UUID, start: datetime, end: datetime, limit: int) -> list[Row]:
         stmt = (
             select(
                 MenuItem.id,
@@ -66,9 +60,7 @@ class AnalyticsRepository(BaseRepository):
         )
         return list((await self.session.execute(stmt)).all())
 
-    async def no_show_stats(
-        self, restaurant_id: uuid.UUID, start: datetime, end: datetime
-    ) -> dict[str, int]:
+    async def no_show_stats(self, restaurant_id: uuid.UUID, start: datetime, end: datetime) -> dict[str, int]:
         stmt = (
             select(Reservation.status, func.count())
             .where(

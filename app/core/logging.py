@@ -15,9 +15,7 @@ import structlog
 
 from app.core.config import Settings
 
-_correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "correlation_id", default=None
-)
+_correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("correlation_id", default=None)
 
 
 def new_correlation_id() -> str:
@@ -46,13 +44,14 @@ def configure_logging(settings: Settings) -> None:
     """Configure structlog + stdlib logging once, at process startup."""
     logging.basicConfig(level=settings.log_level, format="%(message)s")
 
-    shared_processors = [
+    shared_processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         _add_correlation_id,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
     ]
 
+    renderer: structlog.typing.Processor
     if settings.log_format == "json":
         renderer = structlog.processors.JSONRenderer()
     else:
@@ -60,9 +59,7 @@ def configure_logging(settings: Settings) -> None:
 
     structlog.configure(
         processors=[*shared_processors, renderer],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelName(settings.log_level)
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(settings.log_level)),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,

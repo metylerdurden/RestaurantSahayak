@@ -12,6 +12,7 @@ GET /health/ready — dependencies DineOps needs for ordinary agent-request traf
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,11 +26,11 @@ async def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/ready")
+@router.get("/ready", response_model=None)
 async def ready(
     session: AsyncSession = Depends(get_db_session),
     llm: LLMProvider = Depends(get_llm_provider),
-) -> dict:
+) -> dict | JSONResponse:
     checks: dict[str, bool] = {}
 
     try:
@@ -43,7 +44,5 @@ async def ready(
     all_ok = all(checks.values())
     body = {"status": "ok" if all_ok else "degraded", "checks": checks}
     if not all_ok:
-        from fastapi.responses import JSONResponse
-
         return JSONResponse(status_code=503, content=body)
     return body

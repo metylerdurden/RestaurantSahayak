@@ -6,7 +6,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-
 # --- get_daily_sales ---
 
 

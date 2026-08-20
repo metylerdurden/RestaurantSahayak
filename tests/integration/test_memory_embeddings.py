@@ -8,7 +8,7 @@ for every test."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select, update
@@ -126,9 +126,7 @@ async def test_access_tracking_columns_default_and_are_updatable(db_session, emb
     # Simulates what MemoryService.recall() (Phase 6) will do on every read.
     now = datetime.now(timezone.utc)
     await db_session.execute(
-        update(Memory)
-        .where(Memory.id == memory.id)
-        .values(access_count=Memory.access_count + 1, last_accessed_at=now)
+        update(Memory).where(Memory.id == memory.id).values(access_count=Memory.access_count + 1, last_accessed_at=now)
     )
     await db_session.flush()
 
@@ -232,16 +230,30 @@ async def test_scope_key_computed_correctly_for_customer_vs_agent_vs_restaurant_
     vector = embedder.embed(["x"])[0]
 
     customer_scoped = Memory(
-        restaurant_id=restaurant.id, customer_id=customer.id, memory_type="CUSTOMER_PREFERENCE",
-        topic="t1", content={"text": "x"}, embedding=vector, source="manager_stated",
+        restaurant_id=restaurant.id,
+        customer_id=customer.id,
+        memory_type="CUSTOMER_PREFERENCE",
+        topic="t1",
+        content={"text": "x"},
+        embedding=vector,
+        source="manager_stated",
     )
     agent_scoped = Memory(
-        restaurant_id=restaurant.id, agent_name="inventory", memory_type="AGENT_EXPERIENCE",
-        topic="t2", content={"text": "x"}, embedding=vector, source="agent_inferred",
+        restaurant_id=restaurant.id,
+        agent_name="inventory",
+        memory_type="AGENT_EXPERIENCE",
+        topic="t2",
+        content={"text": "x"},
+        embedding=vector,
+        source="agent_inferred",
     )
     restaurant_scoped = Memory(
-        restaurant_id=restaurant.id, memory_type="BUSINESS_RULE",
-        topic="t3", content={"text": "x"}, embedding=vector, source="manager_stated",
+        restaurant_id=restaurant.id,
+        memory_type="BUSINESS_RULE",
+        topic="t3",
+        content={"text": "x"},
+        embedding=vector,
+        source="manager_stated",
     )
     db_session.add_all([customer_scoped, agent_scoped, restaurant_scoped])
     await db_session.flush()

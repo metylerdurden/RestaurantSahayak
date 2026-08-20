@@ -57,7 +57,9 @@ class FakeEmbeddingProvider:
 
 
 def tool_call(call_id: str, name: str, arguments: dict[str, Any]) -> LLMResponse:
-    return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)])
+    return LLMResponse(
+        content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)]
+    )
 
 
 def final(text: str) -> LLMResponse:

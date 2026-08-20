@@ -154,10 +154,8 @@ async def test_calculate_required_inventory_formula():
     repo.list_transactions_since.return_value = fake_txns
     service = InventoryService(repo, AsyncMock(spec=ApprovalService), _settings())
 
-    result_item, avg_usage, projected, recommended, lookback_days = (
-        await service.calculate_required_inventory(
-            restaurant_id=RESTAURANT_ID, item_id=uuid.uuid4(), days_ahead=7
-        )
+    result_item, avg_usage, projected, recommended, lookback_days = await service.calculate_required_inventory(
+        restaurant_id=RESTAURANT_ID, item_id=uuid.uuid4(), days_ahead=7
     )
     assert lookback_days == 14
     assert avg_usage == Decimal("2")

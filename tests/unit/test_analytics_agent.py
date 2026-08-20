@@ -79,8 +79,11 @@ def tools(analytics_service):
 
 def _daily_sales_call(call_id: str, date_from: str, date_to: str):
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="get_daily_sales", arguments={"date_from": date_from, "date_to": date_to})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="get_daily_sales", arguments={"date_from": date_from, "date_to": date_to})
+        ],
     )
 
 
@@ -113,9 +116,10 @@ async def test_revenue_drop_question_compares_two_days(agent_run_service, tools,
 
     assert result.status == "completed"
     assert [tc.tool_name for tc in result.tool_calls] == ["get_daily_sales", "get_daily_sales"]
-    assert result.tool_calls[0].output["days"][0]["revenue"] == "412.00" or float(
-        result.tool_calls[0].output["days"][0]["revenue"]
-    ) == 412.0
+    assert (
+        result.tool_calls[0].output["days"][0]["revenue"] == "412.00"
+        or float(result.tool_calls[0].output["days"][0]["revenue"]) == 412.0
+    )
     assert "412" in result.summary and "610" in result.summary
     assert "may be" in result.summary.lower()  # hedged, not stated as fact
 
@@ -129,13 +133,20 @@ async def test_top_item_question_uses_item_sales(agent_run_service, tools, analy
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(
-                id="c0", name="get_item_sales",
-                arguments={"date_from": "2026-08-12", "date_to": "2026-08-18", "limit": 5},
-            )],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c0",
+                    name="get_item_sales",
+                    arguments={"date_from": "2026-08-12", "date_to": "2026-08-18", "limit": 5},
+                )
+            ],
         ),
-        LLMResponse(content="Lamb Souvlaki performed best this week with 58 sold ($1508.00), ahead of Baklava at 40.", model="fake-model"),
+        LLMResponse(
+            content="Lamb Souvlaki performed best this week with 58 sold ($1508.00), ahead of Baklava at 40.",
+            model="fake-model",
+        ),
     ]
     agent = AnalyticsAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
 
@@ -156,12 +167,22 @@ async def test_no_show_trend_question_compares_two_periods(agent_run_service, to
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c0", name="get_no_show_rate", arguments={"date_from": "2026-08-11", "date_to": "2026-08-17"})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c0", name="get_no_show_rate", arguments={"date_from": "2026-08-11", "date_to": "2026-08-17"}
+                )
+            ],
         ),
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c1", name="get_no_show_rate", arguments={"date_from": "2026-08-04", "date_to": "2026-08-10"})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c1", name="get_no_show_rate", arguments={"date_from": "2026-08-04", "date_to": "2026-08-10"}
+                )
+            ],
         ),
         LLMResponse(
             content="No-shows this week are 16% (8 of 50), up from 6% (3 of 50) last week — an increase.",
@@ -216,8 +237,13 @@ async def test_insufficient_data_is_reported_not_fabricated(agent_run_service, t
 
     responses = [
         LLMResponse(
-            content="", model="fake-model",
-            tool_calls=[ToolCall(id="c0", name="get_no_show_rate", arguments={"date_from": "2026-01-01", "date_to": "2026-01-07"})],
+            content="",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(
+                    id="c0", name="get_no_show_rate", arguments={"date_from": "2026-01-01", "date_to": "2026-01-07"}
+                )
+            ],
         ),
         LLMResponse(
             content="There isn't enough completed-reservation data in that period to compute a no-show rate.",
@@ -230,6 +256,10 @@ async def test_insufficient_data_is_reported_not_fabricated(agent_run_service, t
 
     assert result.status == "completed"
     assert result.tool_calls[0].output["no_show_rate"] is None
-    assert "enough" in result.summary.lower() or "no data" in result.summary.lower() or "isn't enough" in result.summary.lower()
+    assert (
+        "enough" in result.summary.lower()
+        or "no data" in result.summary.lower()
+        or "isn't enough" in result.summary.lower()
+    )
     # no fabricated percentage sign backed by nothing
     assert "%" not in result.summary

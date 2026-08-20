@@ -35,7 +35,15 @@ from app.tools.inventory_tools import (
 )
 from app.tools.reservation_tools import CreateReservationTool
 from app.workflows import register_default_workflows
-from tests.integration.factories import future, make_agent_run, make_customer, make_inventory_item, make_restaurant, make_table, make_user
+from tests.integration.factories import (
+    future,
+    make_agent_run,
+    make_customer,
+    make_inventory_item,
+    make_restaurant,
+    make_table,
+    make_user,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -58,7 +66,9 @@ class ScriptedLLM(LLMProvider):
 
 
 def _tool_call(call_id: str, name: str, arguments: dict) -> LLMResponse:
-    return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)])
+    return LLMResponse(
+        content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)]
+    )
 
 
 def _final(text: str) -> LLMResponse:
@@ -70,15 +80,19 @@ async def test_publishing_reservation_created_triggers_the_inventory_workflow(db
     inventory_service = InventoryService(
         InventoryRepository(db_session), ApprovalService(ApprovalRepository(db_session)), get_settings()
     )
-    inventory_llm = ScriptedLLM([
-        _tool_call("c0", "get_inventory", {}),
-        _final("Stock looks sufficient for this additional demand."),
-    ])
+    inventory_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_inventory", {}),
+            _final("Stock looks sufficient for this additional demand."),
+        ]
+    )
     inventory_agent = InventoryAgent(
         llm=inventory_llm,
         tools=[
-            GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-            CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=agent_run_service,
     )
@@ -88,8 +102,11 @@ async def test_publishing_reservation_created_triggers_the_inventory_workflow(db
 
     approval_service = ApprovalService(ApprovalRepository(db_session))
     reservation_service = ReservationService(
-        ReservationRepository(db_session), CustomerRepository(db_session), approval_service,
-        get_settings(), event_bus=bus,
+        ReservationRepository(db_session),
+        CustomerRepository(db_session),
+        approval_service,
+        get_settings(),
+        event_bus=bus,
     )
     restaurant = await make_restaurant(db_session)
     customer = await make_customer(db_session, restaurant)
@@ -106,9 +123,7 @@ async def test_publishing_reservation_created_triggers_the_inventory_workflow(db
     )
 
     # The reservation.created event was persisted and marked handled...
-    event = (
-        await db_session.execute(select(Event).where(Event.entity_id == created.reservation.id))
-    ).scalar_one()
+    event = (await db_session.execute(select(Event).where(Event.entity_id == created.reservation.id))).scalar_one()
     assert event.event_type == "reservation.created"
     assert event.handled is True
     assert event.handler_results == {"inventory_workflow.handle_reservation_created": "success"}
@@ -116,10 +131,14 @@ async def test_publishing_reservation_created_triggers_the_inventory_workflow(db
     # ...and the Inventory Agent genuinely ran in reaction to it: a real,
     # event-triggered AgentRun exists, linked back to this exact event.
     inventory_runs = (
-        await db_session.execute(
-            select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+        (
+            await db_session.execute(
+                select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(inventory_runs) == 1
     assert inventory_runs[0].trigger_type == "event"
     assert inventory_runs[0].status == "completed"
@@ -132,24 +151,30 @@ async def test_publishing_reservation_created_triggers_the_inventory_workflow(db
 async def test_publishing_inventory_low_triggers_a_purchase_recommendation(db_session):
     agent_run_service = AgentRunService(AgentRunRepository(db_session))
     approval_service = ApprovalService(ApprovalRepository(db_session))
-    inventory_service = InventoryService(
-        InventoryRepository(db_session), approval_service, get_settings()
-    )
+    inventory_service = InventoryService(InventoryRepository(db_session), approval_service, get_settings())
     restaurant = await make_restaurant(db_session)
     item = await make_inventory_item(
         db_session, restaurant, name="Olive Oil", quantity_on_hand=2, low_stock_threshold=10
     )
 
-    inventory_llm = ScriptedLLM([
-        _tool_call("c0", "calculate_required_inventory", {"item_id": str(item.id)}),
-        _tool_call("c1", "create_purchase_request", {"item_id": str(item.id), "requested_quantity": "30", "estimated_cost": "50"}),
-        _final("Ordered 30 more units of Olive Oil to cover projected usage."),
-    ])
+    inventory_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "calculate_required_inventory", {"item_id": str(item.id)}),
+            _tool_call(
+                "c1",
+                "create_purchase_request",
+                {"item_id": str(item.id), "requested_quantity": "30", "estimated_cost": "50"},
+            ),
+            _final("Ordered 30 more units of Olive Oil to cover projected usage."),
+        ]
+    )
     inventory_agent = InventoryAgent(
         llm=inventory_llm,
         tools=[
-            GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-            CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=agent_run_service,
     )
@@ -162,8 +187,10 @@ async def test_publishing_inventory_low_triggers_a_purchase_recommendation(db_se
         restaurant_id=restaurant.id,
         entity_id=item.id,
         payload={
-            "item_id": str(item.id), "item_name": item.name,
-            "quantity_on_hand": "2", "low_stock_threshold": "10",
+            "item_id": str(item.id),
+            "item_name": item.name,
+            "quantity_on_hand": "2",
+            "low_stock_threshold": "10",
         },
         published_by="test",
     )
@@ -172,14 +199,18 @@ async def test_publishing_inventory_low_triggers_a_purchase_recommendation(db_se
     assert event.handler_results == {"inventory_workflow.handle_inventory_low": "success"}
 
     purchase_requests = (
-        await db_session.execute(select(PurchaseRequest).where(PurchaseRequest.item_id == item.id))
-    ).scalars().all()
+        (await db_session.execute(select(PurchaseRequest).where(PurchaseRequest.item_id == item.id))).scalars().all()
+    )
     assert len(purchase_requests) == 1
     assert purchase_requests[0].requested_quantity == 30
 
     inventory_runs = (
-        await db_session.execute(
-            select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+        (
+            await db_session.execute(
+                select(AgentRun).where(AgentRun.agent_name == "inventory", AgentRun.triggering_event_id == event.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(inventory_runs) == 1

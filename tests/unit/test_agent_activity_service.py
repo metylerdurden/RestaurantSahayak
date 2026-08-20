@@ -22,9 +22,17 @@ RESTAURANT_ID = uuid.uuid4()
 def _run(**overrides):
     now = datetime.now(timezone.utc)
     defaults = dict(
-        id=uuid.uuid4(), restaurant_id=RESTAURANT_ID, agent_name="orchestrator", model_name="fake-model",
-        parent_run_id=None, correlation_id=uuid.uuid4(), trigger_type="manager_request", status="completed",
-        outcome_summary="Done.", started_at=now, completed_at=now,
+        id=uuid.uuid4(),
+        restaurant_id=RESTAURANT_ID,
+        agent_name="orchestrator",
+        model_name="fake-model",
+        parent_run_id=None,
+        correlation_id=uuid.uuid4(),
+        trigger_type="manager_request",
+        status="completed",
+        outcome_summary="Done.",
+        started_at=now,
+        completed_at=now,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -33,8 +41,13 @@ def _run(**overrides):
 def _message(run_id, **overrides):
     now = datetime.now(timezone.utc)
     defaults = dict(
-        id=uuid.uuid4(), run_id=run_id, sequence_number=1, role="tool_result", tool_name="get_reservations",
-        content={"result": "ok"}, created_at=now,
+        id=uuid.uuid4(),
+        run_id=run_id,
+        sequence_number=1,
+        role="tool_result",
+        tool_name="get_reservations",
+        content={"result": "ok"},
+        created_at=now,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

@@ -15,13 +15,13 @@ from app.models import (
     Customer,
     InventoryItem,
     Memory,
+    MenuItem,
     Reservation,
     Restaurant,
     Sale,
-    MenuItem,
+    ShiftAssignment,
     Staff,
     StaffShift,
-    ShiftAssignment,
     Table,
     User,
 )
@@ -74,9 +74,7 @@ async def _agent_run(session, restaurant: Restaurant, user: User) -> AgentRun:
 
 async def test_inventory_item_rejects_negative_quantity(db_session):
     restaurant = await _restaurant(db_session)
-    db_session.add(
-        InventoryItem(restaurant_id=restaurant.id, name="Flour", unit="kg", quantity_on_hand=-1)
-    )
+    db_session.add(InventoryItem(restaurant_id=restaurant.id, name="Flour", unit="kg", quantity_on_hand=-1))
     with pytest.raises(IntegrityError):
         await db_session.flush()
 
@@ -84,9 +82,7 @@ async def test_inventory_item_rejects_negative_quantity(db_session):
 async def test_inventory_item_rejects_invalid_status(db_session):
     restaurant = await _restaurant(db_session)
     db_session.add(
-        InventoryItem(
-            restaurant_id=restaurant.id, name="Flour", unit="kg", quantity_on_hand=5, status="spoiled"
-        )
+        InventoryItem(restaurant_id=restaurant.id, name="Flour", unit="kg", quantity_on_hand=5, status="spoiled")
     )
     with pytest.raises(IntegrityError):
         await db_session.flush()

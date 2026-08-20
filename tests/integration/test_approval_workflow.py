@@ -10,20 +10,21 @@ tests/integration/test_reservation_agent_live.py etc."""
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.embeddings.bge_provider import BGEEmbeddingProvider
-from app.models import Approval, Memory
+from app.models import Approval, Event, Memory
 from app.repositories.approval_repo import ApprovalRepository
+from app.repositories.event_repo import EventRepository
 from app.repositories.inventory_repo import InventoryRepository
 from app.repositories.memory_repo import MemoryRepository
 from app.repositories.reservation_repo import ReservationRepository
-from app.core.config import get_settings
 from app.services.approval_execution import build_executors
 from app.services.approval_service import ApprovalService
+from app.services.event_bus import InProcessEventBus
 from app.services.inventory_service import InventoryService
 from app.services.memory_service import MemoryService
 from app.services.reservation_service import ReservationService
@@ -58,7 +59,9 @@ def _plain_approval_service(db_session) -> ApprovalService:
     return ApprovalService(ApprovalRepository(db_session))
 
 
-def _full_approval_service(db_session, embedder, *, reservation_service=None, inventory_service=None) -> ApprovalService:
+def _full_approval_service(
+    db_session, embedder, *, reservation_service=None, inventory_service=None
+) -> ApprovalService:
     executors = build_executors(reservation_service=reservation_service, inventory_service=inventory_service)
     memory_service = MemoryService(MemoryRepository(db_session), embedder)
     return ApprovalService(ApprovalRepository(db_session), executors=executors, memory_service=memory_service)
@@ -261,9 +264,7 @@ async def test_approving_a_cancellation_executes_it_and_stores_a_memory(db_sessi
     listing = await GetReservationsTool(reservation_service)({"status": "cancelled"}, context=context)
     assert listing.reservations[0].id == created.reservation.id
 
-    memories = (
-        await db_session.execute(select(Memory).where(Memory.restaurant_id == restaurant.id))
-    ).scalars().all()
+    memories = (await db_session.execute(select(Memory).where(Memory.restaurant_id == restaurant.id))).scalars().all()
     assert len(memories) == 1
     assert memories[0].memory_type == "PAST_DECISION"
     assert memories[0].topic == f"approval_{approval.id}"
@@ -306,11 +307,94 @@ async def test_approving_an_action_whose_execution_then_fails_records_the_failur
     # The decision itself stands — a manager did approve it — only execution failed.
     assert approval.status == "approved"
     assert approval.execution_result["status"] == "failed"
-    assert "reservation_not_found" in approval.execution_result["error"] or "No reservation found" in approval.execution_result["error"]
+    assert (
+        "reservation_not_found" in approval.execution_result["error"]
+        or "No reservation found" in approval.execution_result["error"]
+    )
     assert approval.executed_at is not None
 
-    memories = (
-        await db_session.execute(select(Memory).where(Memory.restaurant_id == restaurant.id))
-    ).scalars().all()
+    memories = (await db_session.execute(select(Memory).where(Memory.restaurant_id == restaurant.id))).scalars().all()
     assert len(memories) == 1
     assert "failed" in memories[0].content["text"].lower()
+
+
+# --- Step 20 reliability hardening: a database-level failure recording the
+# approval memory must not poison the session for what follows ---
+
+
+class _WrongDimensionEmbedder:
+    """Deliberately returns vectors of the wrong size, so MemoryService.add_memory
+    fails at the database level (a real pgvector dimension mismatch), not just
+    with a caught Python-level exception — the two behave very differently inside
+    a SQLAlchemy transaction (see ApprovalService._execute/_remember)."""
+
+    @property
+    def model_name(self) -> str:
+        return "broken-embedder"
+
+    @property
+    def dimension(self) -> int:
+        return 8
+
+    def embed(self, texts):
+        return [[0.1] * 8 for _ in texts]
+
+    def health_check(self) -> bool:
+        return True
+
+
+async def test_a_database_level_memory_recording_failure_does_not_poison_the_rest_of_the_decision(db_session):
+    approval_service = _plain_approval_service(db_session)
+    reservation_service = await _make_reservation_service(db_session, approval_service)
+
+    broken_memory_service = MemoryService(MemoryRepository(db_session), _WrongDimensionEmbedder())
+    event_bus = InProcessEventBus(EventRepository(db_session))
+    full_approval_service = ApprovalService(
+        ApprovalRepository(db_session),
+        executors=build_executors(reservation_service=reservation_service),
+        memory_service=broken_memory_service,
+        event_bus=event_bus,
+    )
+    reservation_service.approval_service = full_approval_service
+
+    restaurant = await make_restaurant(db_session)
+    customer = await make_customer(db_session, restaurant)
+    user = await make_user(db_session, restaurant)
+    agent_run = await make_agent_run(db_session, restaurant, user)
+    await make_table(db_session, restaurant, seat_capacity=8)
+
+    context = ToolContext(
+        restaurant_id=restaurant.id, correlation_id="c1", acting_agent="reservation", agent_run_id=agent_run.id
+    )
+    created = await CreateReservationTool(reservation_service)(
+        {"customer_id": str(customer.id), "party_size": 8, "requested_time": future().isoformat()}, context=context
+    )
+    cancel_result = await CancelReservationTool(reservation_service)(
+        {"reservation_id": str(created.reservation.id)}, context=context
+    )
+
+    # Must not raise: memory recording fails for real (wrong pgvector dimension),
+    # but the approval decision and the event-publish call right after it must
+    # both still go through — that's the whole point of the SAVEPOINT isolation.
+    approval = await full_approval_service.approve(cancel_result.approval_id, user.id)
+
+    assert approval.status == "approved"
+    assert approval.execution_result["status"] == "success"
+
+    # No memory was actually persisted — the failure was real, not silently
+    # swallowed into a fake success.
+    memories = (await db_session.execute(select(Memory).where(Memory.restaurant_id == restaurant.id))).scalars().all()
+    assert memories == []
+
+    # ...but the session stayed usable: the approval.completed event published
+    # immediately afterward, in the same request, actually made it to the database.
+    events = (
+        (
+            await db_session.execute(
+                select(Event).where(Event.restaurant_id == restaurant.id, Event.event_type == "approval.completed")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1

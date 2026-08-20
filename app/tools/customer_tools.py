@@ -42,9 +42,7 @@ class GetCustomerHistoryTool(Tool[GetCustomerHistoryInput, GetCustomerHistoryOut
     def __init__(self, service: CustomerService) -> None:
         self.service = service
 
-    async def run(
-        self, input: GetCustomerHistoryInput, *, context: ToolContext
-    ) -> GetCustomerHistoryOutput:
+    async def run(self, input: GetCustomerHistoryInput, *, context: ToolContext) -> GetCustomerHistoryOutput:
         customer, reservations = await self.service.get_customer_history(
             restaurant_id=context.restaurant_id, customer_id=input.customer_id, limit=input.limit
         )

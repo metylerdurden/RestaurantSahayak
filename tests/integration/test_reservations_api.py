@@ -33,7 +33,12 @@ async def test_list_reservations_filters_by_restaurant(client, db_session):
     customer = await make_customer(db_session, restaurant)
     table = await make_table(db_session, restaurant)
     reservation = await make_reservation(db_session, restaurant, customer, table)
-    await make_reservation(db_session, other_restaurant, await make_customer(db_session, other_restaurant), await make_table(db_session, other_restaurant))
+    await make_reservation(
+        db_session,
+        other_restaurant,
+        await make_customer(db_session, other_restaurant),
+        await make_table(db_session, other_restaurant),
+    )
 
     response = await client.get(f"/api/v1/reservations?restaurant_id={restaurant.id}")
 

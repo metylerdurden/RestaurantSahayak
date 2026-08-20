@@ -90,7 +90,5 @@ async def test_get_staff_availability_excludes_already_assigned():
     service = StaffingService(repo, _settings())
     start, end = _window()
 
-    available = await service.get_staff_availability(
-        restaurant_id=RESTAURANT_ID, start_at=start, end_at=end, role=None
-    )
+    available = await service.get_staff_availability(restaurant_id=RESTAURANT_ID, start_at=start, end_at=end, role=None)
     assert [s.id for s in available] == [free_id]

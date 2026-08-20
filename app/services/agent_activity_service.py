@@ -51,14 +51,9 @@ class AgentActivityService:
 
         return await self._build_node(run, children_by_parent)
 
-    async def _build_node(
-        self, run: AgentRun, children_by_parent: dict[uuid.UUID, list[AgentRun]]
-    ) -> AgentRunNode:
+    async def _build_node(self, run: AgentRun, children_by_parent: dict[uuid.UUID, list[AgentRun]]) -> AgentRunNode:
         messages = await self.repo.list_messages(run.id)
-        children = [
-            await self._build_node(child, children_by_parent)
-            for child in children_by_parent.get(run.id, [])
-        ]
+        children = [await self._build_node(child, children_by_parent) for child in children_by_parent.get(run.id, [])]
         return AgentRunNode(
             id=run.id,
             agent_name=run.agent_name,

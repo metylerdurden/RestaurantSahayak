@@ -39,7 +39,12 @@ class ReservationService:
         self.event_bus = event_bus
 
     async def _publish(
-        self, event_type: str, *, restaurant_id: uuid.UUID, entity_id: uuid.UUID, payload: dict[str, Any],
+        self,
+        event_type: str,
+        *,
+        restaurant_id: uuid.UUID,
+        entity_id: uuid.UUID,
+        payload: dict[str, Any],
         correlation_id: uuid.UUID | None,
     ) -> None:
         if self.event_bus is None:
@@ -63,8 +68,7 @@ class ReservationService:
         if context.agent_run_id is None:
             raise ToolError(
                 "agent_run_required",
-                "A high-impact action must be attributed to an agent run before it can "
-                "be proposed for approval.",
+                "A high-impact action must be attributed to an agent run before it can be proposed for approval.",
             )
         return context.agent_run_id
 
@@ -127,9 +131,7 @@ class ReservationService:
                 raise ToolError("table_conflict", f"Table {table.label} is already booked at that time")
             chosen_table_id = table.id
         else:
-            candidates = await self.repo.find_available_tables(
-                restaurant_id, party_size, requested_time, duration
-            )
+            candidates = await self.repo.find_available_tables(restaurant_id, party_size, requested_time, duration)
             if not candidates:
                 raise ToolError(
                     "no_availability",
@@ -211,8 +213,7 @@ class ReservationService:
                     "reservation_id": str(reservation_id),
                     "changes": changes,
                 },
-                reason=f"Modify reservation for party of {effective_party_size} "
-                f"on {reservation.requested_time.date()}",
+                reason=f"Modify reservation for party of {effective_party_size} on {reservation.requested_time.date()}",
                 risk_level="MEDIUM",
             )
             return PendingApprovalOutput(approval_id=approval.id, summary=approval.reason)
@@ -285,9 +286,7 @@ class ReservationService:
             if "requested_time" in changes
             else reservation.requested_time
         )
-        new_table_id = (
-            uuid.UUID(changes["table_id"]) if "table_id" in changes else reservation.table_id
-        )
+        new_table_id = uuid.UUID(changes["table_id"]) if "table_id" in changes else reservation.table_id
 
         if new_table_id is not None and (
             "table_id" in changes or "requested_time" in changes or "party_size" in changes

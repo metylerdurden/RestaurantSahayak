@@ -43,9 +43,7 @@ def build_background_workflows(
     staffing_agent: StaffingAgent,
 ) -> dict[str, BackgroundWorkflow]:
     return {
-        "daily_briefing": DailyBriefingWorkflow(
-            workflow_run_repo=workflow_run_repo, orchestrator=orchestrator
-        ),
+        "daily_briefing": DailyBriefingWorkflow(workflow_run_repo=workflow_run_repo, orchestrator=orchestrator),
         "inventory_monitoring": InventoryMonitoringWorkflow(
             workflow_run_repo=workflow_run_repo, inventory_agent=inventory_agent
         ),

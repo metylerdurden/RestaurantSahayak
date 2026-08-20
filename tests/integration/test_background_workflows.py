@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
 
 from app.agents.inventory_agent import InventoryAgent
 from app.agents.orchestrator_agent import OrchestratorAgent
@@ -57,7 +58,6 @@ from app.workflows.daily_briefing_workflow import DailyBriefingWorkflow
 from app.workflows.inventory_monitoring_workflow import InventoryMonitoringWorkflow
 from app.workflows.reservation_monitoring_workflow import ReservationMonitoringWorkflow
 from app.workflows.staffing_monitoring_workflow import StaffingMonitoringWorkflow
-from sqlalchemy import select
 from tests.integration.factories import make_customer, make_inventory_item, make_restaurant, make_staff, make_table
 
 pytestmark = pytest.mark.asyncio
@@ -81,7 +81,9 @@ class ScriptedLLM(LLMProvider):
 
 
 def _tool_call(call_id: str, name: str, arguments: dict) -> LLMResponse:
-    return LLMResponse(content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)])
+    return LLMResponse(
+        content="", model="fake-model", tool_calls=[ToolCall(id=call_id, name=name, arguments=arguments)]
+    )
 
 
 def _final(text: str) -> LLMResponse:
@@ -90,8 +92,19 @@ def _final(text: str) -> LLMResponse:
 
 def _delegate(call_id: str, agent_name: str, instruction: str) -> LLMResponse:
     return LLMResponse(
-        content="", model="fake-model",
-        tool_calls=[ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})],
+        content="",
+        model="fake-model",
+        tool_calls=[
+            ToolCall(id=call_id, name="delegate", arguments={"agent_name": agent_name, "instruction": instruction})
+        ],
+    )
+
+
+def _identify_domains(*domains: str) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        model="fake-model",
+        tool_calls=[ToolCall(id="scope", name="identify_required_domains", arguments={"domains": list(domains)})],
     )
 
 
@@ -101,21 +114,31 @@ def _finish(call_id: str = "finish") -> LLMResponse:
 
 async def test_inventory_monitoring_workflow_creates_a_pending_approval_not_a_blind_purchase(db_session):
     restaurant = await make_restaurant(db_session)
-    item = await make_inventory_item(db_session, restaurant, name="Truffle Oil", quantity_on_hand=1, low_stock_threshold=5)
+    item = await make_inventory_item(
+        db_session, restaurant, name="Truffle Oil", quantity_on_hand=1, low_stock_threshold=5
+    )
 
-    inventory_llm = ScriptedLLM([
-        _tool_call("c0", "get_inventory", {"status": "low"}),
-        _tool_call("c1", "calculate_required_inventory", {"item_id": str(item.id)}),
-        _tool_call("c2", "create_purchase_request", {"item_id": str(item.id), "requested_quantity": "40", "estimated_cost": "600"}),
-        _final("Truffle Oil is low. Requested 40 units at an estimated $600 — this needs manager approval."),
-    ])
+    inventory_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_inventory", {"status": "low"}),
+            _tool_call("c1", "calculate_required_inventory", {"item_id": str(item.id)}),
+            _tool_call(
+                "c2",
+                "create_purchase_request",
+                {"item_id": str(item.id), "requested_quantity": "40", "estimated_cost": "600"},
+            ),
+            _final("Truffle Oil is low. Requested 40 units at an estimated $600 — this needs manager approval."),
+        ]
+    )
     approval_service = ApprovalService(ApprovalRepository(db_session))
     inventory_service = InventoryService(InventoryRepository(db_session), approval_service, get_settings())
     inventory_agent = InventoryAgent(
         llm=inventory_llm,
         tools=[
-            GetInventoryTool(inventory_service), CheckStockTool(inventory_service),
-            CalculateRequiredInventoryTool(inventory_service), CreatePurchaseRequestTool(inventory_service),
+            GetInventoryTool(inventory_service),
+            CheckStockTool(inventory_service),
+            CalculateRequiredInventoryTool(inventory_service),
+            CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=AgentRunService(AgentRunRepository(db_session)),
     )
@@ -132,14 +155,14 @@ async def test_inventory_monitoring_workflow_creates_a_pending_approval_not_a_bl
 
     # The high-impact action must NOT have executed automatically.
     purchase_requests = (
-        await db_session.execute(select(PurchaseRequest).where(PurchaseRequest.item_id == item.id))
-    ).scalars().all()
+        (await db_session.execute(select(PurchaseRequest).where(PurchaseRequest.item_id == item.id))).scalars().all()
+    )
     assert len(purchase_requests) == 1
     assert purchase_requests[0].status == "pending_approval"
 
     approvals = (
-        await db_session.execute(select(Approval).where(Approval.restaurant_id == restaurant.id))
-    ).scalars().all()
+        (await db_session.execute(select(Approval).where(Approval.restaurant_id == restaurant.id))).scalars().all()
+    )
     assert len(approvals) == 1
     assert approvals[0].status == "pending"
     assert approvals[0].domain == "purchase"
@@ -150,16 +173,26 @@ async def test_staffing_monitoring_workflow_invokes_staffing_agent_directly(db_s
     await make_staff(db_session, restaurant, role="server", name="Alex")
     start = (utcnow() + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
 
-    staffing_llm = ScriptedLLM([
-        _tool_call("c0", "get_staff_schedule", {"date_from": start.isoformat(), "date_to": start.isoformat()}),
-        _tool_call("c1", "calculate_staff_requirement", {"start_at": start.isoformat(), "end_at": (start + timedelta(hours=4)).isoformat()}),
-        _final("No shifts currently scheduled for tomorrow; based on expected demand, schedule 1 server, 1 cook, 1 host."),
-    ])
+    staffing_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_staff_schedule", {"date_from": start.isoformat(), "date_to": start.isoformat()}),
+            _tool_call(
+                "c1",
+                "calculate_staff_requirement",
+                {"start_at": start.isoformat(), "end_at": (start + timedelta(hours=4)).isoformat()},
+            ),
+            _final(
+                "No shifts currently scheduled for tomorrow; based on expected demand, "
+                "schedule 1 server, 1 cook, 1 host."
+            ),
+        ]
+    )
     staffing_service = StaffingService(StaffingRepository(db_session), get_settings())
     staffing_agent = StaffingAgent(
         llm=staffing_llm,
         tools=[
-            GetStaffScheduleTool(staffing_service), GetStaffAvailabilityTool(staffing_service),
+            GetStaffScheduleTool(staffing_service),
+            GetStaffAvailabilityTool(staffing_service),
             CalculateStaffRequirementTool(staffing_service),
         ],
         agent_run_service=AgentRunService(AgentRunRepository(db_session)),
@@ -181,10 +214,12 @@ async def test_daily_briefing_workflow_uses_the_orchestrator_and_is_traceable(db
     await make_customer(db_session, restaurant)
     await make_table(db_session, restaurant, seat_capacity=4)
 
-    reservation_llm = ScriptedLLM([
-        _tool_call("c0", "get_reservations", {}),
-        _final("2 reservations booked today, 6 covers total."),
-    ])
+    reservation_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_reservations", {}),
+            _final("2 reservations booked today, 6 covers total."),
+        ]
+    )
     approval_service = ApprovalService(ApprovalRepository(db_session))
     reservation_service = ReservationService(
         ReservationRepository(db_session), CustomerRepository(db_session), approval_service, get_settings()
@@ -192,18 +227,23 @@ async def test_daily_briefing_workflow_uses_the_orchestrator_and_is_traceable(db
     reservation_agent = ReservationAgent(
         llm=reservation_llm,
         tools=[
-            GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-            CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
             CancelReservationTool(reservation_service),
         ],
         agent_run_service=AgentRunService(AgentRunRepository(db_session)),
     )
 
-    orchestrator_llm = ScriptedLLM([
-        _delegate("o0", "reservation", "What reservations and expected covers do we have today?"),
-        _finish(),
-        _final("Good morning! Today: 2 reservations booked, 6 covers total. Nothing else to flag."),
-    ])
+    orchestrator_llm = ScriptedLLM(
+        [
+            _identify_domains("reservation"),
+            _delegate("o0", "reservation", "What reservations and expected covers do we have today?"),
+            _finish(),
+            _final("Good morning! Today: 2 reservations booked, 6 covers total. Nothing else to flag."),
+        ]
+    )
     orchestrator = OrchestratorAgent(
         llm=orchestrator_llm,
         specialists={"reservation": reservation_agent},
@@ -236,10 +276,12 @@ async def test_reservation_monitoring_workflow_uses_the_orchestrator(db_session)
     await make_customer(db_session, restaurant, name="Raj Patel")
     await make_table(db_session, restaurant, seat_capacity=8)
 
-    reservation_llm = ScriptedLLM([
-        _tool_call("c0", "get_reservations", {}),
-        _final("No unusual reservations found for the upcoming period."),
-    ])
+    reservation_llm = ScriptedLLM(
+        [
+            _tool_call("c0", "get_reservations", {}),
+            _final("No unusual reservations found for the upcoming period."),
+        ]
+    )
     approval_service = ApprovalService(ApprovalRepository(db_session))
     reservation_service = ReservationService(
         ReservationRepository(db_session), CustomerRepository(db_session), approval_service, get_settings()
@@ -247,17 +289,22 @@ async def test_reservation_monitoring_workflow_uses_the_orchestrator(db_session)
     reservation_agent = ReservationAgent(
         llm=reservation_llm,
         tools=[
-            GetReservationsTool(reservation_service), FindAvailableTableTool(reservation_service),
-            CreateReservationTool(reservation_service), ModifyReservationTool(reservation_service),
+            GetReservationsTool(reservation_service),
+            FindAvailableTableTool(reservation_service),
+            CreateReservationTool(reservation_service),
+            ModifyReservationTool(reservation_service),
             CancelReservationTool(reservation_service),
         ],
         agent_run_service=AgentRunService(AgentRunRepository(db_session)),
     )
-    orchestrator_llm = ScriptedLLM([
-        _delegate("o0", "reservation", "Are there any unusual upcoming reservations?"),
-        _finish(),
-        _final("Nothing unusual among upcoming reservations right now."),
-    ])
+    orchestrator_llm = ScriptedLLM(
+        [
+            _identify_domains("reservation"),
+            _delegate("o0", "reservation", "Are there any unusual upcoming reservations?"),
+            _finish(),
+            _final("Nothing unusual among upcoming reservations right now."),
+        ]
+    )
     orchestrator = OrchestratorAgent(
         llm=orchestrator_llm,
         specialists={"reservation": reservation_agent},
@@ -291,7 +338,8 @@ async def test_a_failing_agent_marks_the_workflow_run_failed_not_the_process(db_
     staffing_agent = StaffingAgent(
         llm=BoomLLM(),
         tools=[
-            GetStaffScheduleTool(staffing_service), GetStaffAvailabilityTool(staffing_service),
+            GetStaffScheduleTool(staffing_service),
+            GetStaffAvailabilityTool(staffing_service),
             CalculateStaffRequirementTool(staffing_service),
         ],
         agent_run_service=AgentRunService(AgentRunRepository(db_session)),

@@ -37,8 +37,14 @@ class FakeWorkflow(BackgroundWorkflow):
 
 def _workflow_run_row(**overrides):
     defaults = dict(
-        id=uuid.uuid4(), workflow_type="daily_briefing", restaurant_id=RESTAURANT_ID,
-        status="running", triggered_by="manual", final_result=None, error=None, completed_at=None,
+        id=uuid.uuid4(),
+        workflow_type="daily_briefing",
+        restaurant_id=RESTAURANT_ID,
+        status="running",
+        triggered_by="manual",
+        final_result=None,
+        error=None,
+        completed_at=None,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

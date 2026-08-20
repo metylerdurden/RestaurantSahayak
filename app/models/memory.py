@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -127,7 +128,10 @@ class Memory(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
 
     importance: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=3)
-    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=1.00)
+    # Numeric(3, 2) round-trips as Decimal, not float — memory_service.py already
+    # treated it that way (Decimal(str(round(...))) on write, explicit float(...)
+    # casts on read); this just makes the type hint match reality.
+    confidence: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("1.00"))
     source: Mapped[str] = mapped_column(String, nullable=False)
     source_agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True

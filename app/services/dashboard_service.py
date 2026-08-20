@@ -67,9 +67,7 @@ class DashboardService:
         reservations = await self.reservation_service.get_reservations(
             restaurant_id=restaurant_id, date_from=day_start, date_to=day_end, status=None, customer_id=None
         )
-        expected_covers = sum(
-            r.party_size for r in reservations if r.status in ACTIVE_RESERVATION_STATUSES
-        )
+        expected_covers = sum(r.party_size for r in reservations if r.status in ACTIVE_RESERVATION_STATUSES)
 
         low_stock = await self.inventory_service.get_inventory(
             restaurant_id=restaurant_id, status="low", name_contains=None
@@ -120,17 +118,19 @@ class DashboardService:
             daily_briefing_generated_at=daily_briefing_generated_at,
             recent_events=[
                 EventSummaryDTO(
-                    event_id=e.id, event_type=e.event_type, entity_id=e.entity_id,
-                    payload=e.payload, created_at=e.created_at, handled=e.handled,
+                    event_id=e.id,
+                    event_type=e.event_type,
+                    entity_id=e.entity_id,
+                    payload=e.payload,
+                    created_at=e.created_at,
+                    handled=e.handled,
                 )
                 for e in recent_events
             ],
         )
 
     async def _latest_daily_briefing(self, restaurant_id: uuid.UUID) -> tuple[str | None, datetime | None]:
-        runs = await self.workflow_run_repo.list_recent(
-            restaurant_id, workflow_type="daily_briefing", limit=1
-        )
+        runs = await self.workflow_run_repo.list_recent(restaurant_id, workflow_type="daily_briefing", limit=1)
         if not runs or runs[0].status != "completed" or not runs[0].final_result:
             return None, None
         return runs[0].final_result.get("briefing"), runs[0].completed_at

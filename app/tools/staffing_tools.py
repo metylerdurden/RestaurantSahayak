@@ -31,9 +31,7 @@ class GetStaffScheduleTool(Tool[GetStaffScheduleInput, GetStaffScheduleOutput]):
     def __init__(self, service: StaffingService) -> None:
         self.service = service
 
-    async def run(
-        self, input: GetStaffScheduleInput, *, context: ToolContext
-    ) -> GetStaffScheduleOutput:
+    async def run(self, input: GetStaffScheduleInput, *, context: ToolContext) -> GetStaffScheduleOutput:
         rows = await self.service.get_staff_schedule(
             restaurant_id=context.restaurant_id, date_from=input.date_from, date_to=input.date_to
         )
@@ -64,9 +62,7 @@ class GetStaffAvailabilityTool(Tool[GetStaffAvailabilityInput, GetStaffAvailabil
     def __init__(self, service: StaffingService) -> None:
         self.service = service
 
-    async def run(
-        self, input: GetStaffAvailabilityInput, *, context: ToolContext
-    ) -> GetStaffAvailabilityOutput:
+    async def run(self, input: GetStaffAvailabilityInput, *, context: ToolContext) -> GetStaffAvailabilityOutput:
         staff = await self.service.get_staff_availability(
             restaurant_id=context.restaurant_id,
             start_at=input.start_at,
@@ -76,9 +72,7 @@ class GetStaffAvailabilityTool(Tool[GetStaffAvailabilityInput, GetStaffAvailabil
         return GetStaffAvailabilityOutput(available_staff=[StaffDTO.model_validate(s) for s in staff])
 
 
-class CalculateStaffRequirementTool(
-    Tool[CalculateStaffRequirementInput, CalculateStaffRequirementOutput]
-):
+class CalculateStaffRequirementTool(Tool[CalculateStaffRequirementInput, CalculateStaffRequirementOutput]):
     name = "calculate_staff_requirement"
     description = (
         "Estimate how many servers/cooks are needed for a shift, based on expected "

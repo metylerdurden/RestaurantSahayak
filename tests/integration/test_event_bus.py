@@ -31,7 +31,15 @@ from app.tools.base import ToolContext
 from app.tools.customer_tools import UpdateCustomerTool
 from app.tools.inventory_tools import CheckStockTool, CreatePurchaseRequestTool
 from app.tools.reservation_tools import CreateReservationTool
-from tests.integration.factories import future, make_agent_run, make_customer, make_inventory_item, make_restaurant, make_table, make_user
+from tests.integration.factories import (
+    future,
+    make_agent_run,
+    make_customer,
+    make_inventory_item,
+    make_restaurant,
+    make_table,
+    make_user,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -60,16 +68,26 @@ async def test_idempotency_key_is_unique_per_restaurant_at_the_database_level(db
     restaurant = await make_restaurant(db_session)
     db_session.add(
         Event(
-            event_type="reservation.created", restaurant_id=restaurant.id, entity_id=uuid.uuid4(),
-            payload={}, correlation_id=uuid.uuid4(), published_by="x", idempotency_key="dup-key",
+            event_type="reservation.created",
+            restaurant_id=restaurant.id,
+            entity_id=uuid.uuid4(),
+            payload={},
+            correlation_id=uuid.uuid4(),
+            published_by="x",
+            idempotency_key="dup-key",
         )
     )
     await db_session.flush()
 
     db_session.add(
         Event(
-            event_type="reservation.created", restaurant_id=restaurant.id, entity_id=uuid.uuid4(),
-            payload={}, correlation_id=uuid.uuid4(), published_by="x", idempotency_key="dup-key",
+            event_type="reservation.created",
+            restaurant_id=restaurant.id,
+            entity_id=uuid.uuid4(),
+            payload={},
+            correlation_id=uuid.uuid4(),
+            published_by="x",
+            idempotency_key="dup-key",
         )
     )
     with pytest.raises(IntegrityError):
@@ -80,8 +98,11 @@ async def test_creating_a_reservation_publishes_a_real_event(db_session):
     bus = InProcessEventBus(EventRepository(db_session))
     approval_service = ApprovalService(ApprovalRepository(db_session))
     reservation_service = ReservationService(
-        ReservationRepository(db_session), CustomerRepository(db_session), approval_service,
-        get_settings(), event_bus=bus,
+        ReservationRepository(db_session),
+        CustomerRepository(db_session),
+        approval_service,
+        get_settings(),
+        event_bus=bus,
     )
     restaurant = await make_restaurant(db_session)
     customer = await make_customer(db_session, restaurant)
@@ -96,9 +117,7 @@ async def test_creating_a_reservation_publishes_a_real_event(db_session):
         {"customer_id": str(customer.id), "party_size": 2, "requested_time": future().isoformat()}, context=context
     )
 
-    events = (
-        await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))
-    ).scalars().all()
+    events = (await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))).scalars().all()
     assert len(events) == 1
     assert events[0].event_type == "reservation.created"
     assert events[0].entity_id == created.reservation.id
@@ -120,9 +139,7 @@ async def test_checking_insufficient_stock_publishes_inventory_low(db_session):
     )
     assert output.sufficient is False
 
-    events = (
-        await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))
-    ).scalars().all()
+    events = (await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))).scalars().all()
     assert len(events) == 1
     assert events[0].event_type == "inventory.low"
     assert events[0].entity_id == item.id
@@ -146,9 +163,7 @@ async def test_purchase_request_publishes_purchase_requested(db_session):
         {"item_id": str(item.id), "requested_quantity": "50", "estimated_cost": "500"}, context=context
     )
 
-    events = (
-        await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))
-    ).scalars().all()
+    events = (await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))).scalars().all()
     types = {e.event_type for e in events}
     assert "purchase.requested" in types
     assert "approval.created" in types
@@ -174,9 +189,7 @@ async def test_approving_a_purchase_publishes_purchase_approved_and_approval_com
 
     await approval_service.approve(result.approval_id, user.id)
 
-    events = (
-        await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))
-    ).scalars().all()
+    events = (await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))).scalars().all()
     types = [e.event_type for e in events]
     assert "purchase.approved" in types
     assert types.count("approval.completed") == 1
@@ -193,9 +206,7 @@ async def test_updating_a_customer_publishes_customer_updated(db_session):
         {"customer_id": str(customer.id), "phone": "+15559998888"}, context=context
     )
 
-    events = (
-        await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))
-    ).scalars().all()
+    events = (await db_session.execute(select(Event).where(Event.restaurant_id == restaurant.id))).scalars().all()
     assert len(events) == 1
     assert events[0].event_type == "customer.updated"
     assert events[0].payload["changed"] == {"phone": "+15559998888"}

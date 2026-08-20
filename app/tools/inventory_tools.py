@@ -53,14 +53,10 @@ class CheckStockTool(Tool[CheckStockInput, CheckStockOutput]):
             required_quantity=input.required_quantity,
             context=context,
         )
-        return CheckStockOutput(
-            item=InventoryItemDTO.model_validate(item), sufficient=sufficient, shortfall=shortfall
-        )
+        return CheckStockOutput(item=InventoryItemDTO.model_validate(item), sufficient=sufficient, shortfall=shortfall)
 
 
-class CalculateRequiredInventoryTool(
-    Tool[CalculateRequiredInventoryInput, CalculateRequiredInventoryOutput]
-):
+class CalculateRequiredInventoryTool(Tool[CalculateRequiredInventoryInput, CalculateRequiredInventoryOutput]):
     name = "calculate_required_inventory"
     description = (
         "Estimate how much of an inventory item should be ordered to stay stocked "
@@ -75,10 +71,8 @@ class CalculateRequiredInventoryTool(
     async def run(
         self, input: CalculateRequiredInventoryInput, *, context: ToolContext
     ) -> CalculateRequiredInventoryOutput:
-        item, avg_usage, projected, recommended, lookback_days = (
-            await self.service.calculate_required_inventory(
-                restaurant_id=context.restaurant_id, item_id=input.item_id, days_ahead=input.days_ahead
-            )
+        item, avg_usage, projected, recommended, lookback_days = await self.service.calculate_required_inventory(
+            restaurant_id=context.restaurant_id, item_id=input.item_id, days_ahead=input.days_ahead
         )
         return CalculateRequiredInventoryOutput(
             item=InventoryItemDTO.model_validate(item),

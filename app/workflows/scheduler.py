@@ -48,9 +48,7 @@ class AsyncIOScheduler(Scheduler):
 
     async def start(self) -> None:
         for job_id, (interval, func) in self._jobs.items():
-            self._tasks[job_id] = asyncio.create_task(
-                self._loop(job_id, interval, func), name=f"scheduler:{job_id}"
-            )
+            self._tasks[job_id] = asyncio.create_task(self._loop(job_id, interval, func), name=f"scheduler:{job_id}")
         _logger.info("scheduler.started", job_ids=list(self._jobs))
 
     async def stop(self) -> None:
