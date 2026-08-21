@@ -1,6 +1,8 @@
-# DineOps Development Roadmap
+# Restaurant Sahayak Development Roadmap
 
-This document records how DineOps was actually built: 20 sequential, numbered
+This document records how Restaurant Sahayak (built under the working name "DineOps"
+through Step 19, renamed afterward — see the note on commit-message quoting below) was
+actually built: 20 sequential, numbered
 increments, each with an objective, the real engineering decisions made, the
 technologies involved, and what it delivered. Status for every step is based on
 inspecting this repository directly (commit history, current source tree, test suite) —
@@ -33,6 +35,13 @@ reconstructed from `git log` for the purpose of this document — not a second S
 artifact. It is presented here because it is what actually happened, split and combined
 commits included, rather than a tidier account than the real one.
 
+**A note on the project's name**: this project was renamed from "DineOps" to
+"Restaurant Sahayak" after Step 20. Commit messages quoted verbatim below (e.g. Step 1's
+and Step 19's) still say "DineOps" because that is what the actual commit says — they
+are left unedited rather than rewritten to match the current name, for the same reason
+this whole document insists on citing real commit hashes: it is a record of what
+actually happened, not a retouched one.
+
 Each step below names the actual commit(s) that delivered it. Step 20 (this hardening
 and documentation pass) is still in progress in the working tree at the time of writing
 and has not been committed.
@@ -64,7 +73,7 @@ still checked against.
 
 **Status: IMPLEMENTED** · Commit: `33f142f Add core platform MVP specification (Spec Kit)`
 
-**Objective**: Define what DineOps must do — in product/requirements terms, before any
+**Objective**: Define what Restaurant Sahayak must do — in product/requirements terms, before any
 architecture — via `/speckit-specify`.
 
 **Engineering decisions**: Scoped the MVP explicitly: one restaurant, one manager
@@ -232,7 +241,7 @@ system prompt, and tool set on top of that shared loop — no domain-specific lo
 **Status: IMPLEMENTED** · Commit: `f78f5a7 Implement Phase 6: persistent MemoryService and Customer Agent`
 
 **Objective**: Build the persistent long-term memory subsystem and the Customer Agent
-that relies on it most — the mechanism that lets DineOps recall a fact across separate
+that relies on it most — the mechanism that lets Restaurant Sahayak recall a fact across separate
 conversations without RAG.
 
 **Engineering decisions**: `MemoryService` designed around structured facts (one
@@ -388,7 +397,7 @@ behind without touching any publisher or handler.
 
 **Status: IMPLEMENTED** · Commit: `1e99f04 Implement Step 17: Background and Autonomous Agent Workflows`
 
-**Objective**: Let DineOps do work on a schedule, with no trigger at all from a
+**Objective**: Let Restaurant Sahayak do work on a schedule, with no trigger at all from a
 manager or an event.
 
 **Engineering decisions**: `BackgroundWorkflow` mirrors `ToolCallingAgent`'s role for

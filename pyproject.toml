@@ -1,7 +1,7 @@
 [project]
 name = "dineops"
 version = "0.1.0"
-description = "DineOps: agent-first restaurant operations platform"
+description = "Restaurant Sahayak (formerly DineOps): agent-first restaurant operations platform"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.19.1",

@@ -1,4 +1,4 @@
-# DineOps
+# Restaurant Sahayak
 
 **An agentic AI restaurant operations platform, built spec-driven** — planned and
 specified before any code was written, then implemented in sequential, documented
@@ -12,7 +12,7 @@ through raw SQL or document retrieval.
 ## Table of contents
 
 - [Problem and motivation](#problem-and-motivation)
-- [What DineOps does](#what-dineops-does)
+- [What Restaurant Sahayak does](#what-restaurant-sahayak-does)
 - [Architecture](#architecture)
 - [Model architecture](#model-architecture)
 - [Persistent memory vs. RAG](#persistent-memory-vs-rag)
@@ -38,25 +38,30 @@ history) that don't talk to each other. Answering any one of them well means che
 multiple places and remembering context (a regular's seating preference, a recurring
 supplier issue) that no single screen holds.
 
-DineOps explores what that experience looks like if a manager can just ask, in plain
+Restaurant Sahayak explores what that experience looks like if a manager can just ask, in plain
 language, and have a coordinated set of AI agents go check the actual operational data,
 reason about what matters, remember relevant context across conversations, and — for
 anything with real consequence — come back for a human decision rather than act
 unilaterally.
 
-**Why this matters operationally**: the faster a manager can resolve these
-cross-cutting questions, the faster the decisions that actually affect service happen —
-adequate staffing confirmed before the dinner rush, a stockout caught before it forces a
-mid-service substitution, a table's real availability checked before a party is seated
-somewhere that will need to turn over again in ten minutes. That is a genuine, if
-indirect, lever on customer-facing wait time: DineOps speeds up the manager-side
-decisions that are real inputs to smooth, fast service. It is worth being precise about
-what this is *not*, though — there is no live host-stand or waitlist view, no
-table-turnover tracking, and no kitchen-ticket timing today (see
-[Limitations](#limitations)); this is a back-office decision-support layer, not a
-real-time front-of-house wait-time system.
+**Why this matters for the business**: every specialist here maps to something that
+affects the bottom line directly, not abstractly. The Analytics Agent surfaces real
+revenue, covers, and item-sales numbers on demand instead of buried in a report nobody
+opens. The Inventory Agent catches a stockout before it becomes a lost sale or a
+mid-service substitution the guest didn't want. The approval system gates high-cost
+purchases and large cancellations so spend stays under real oversight instead of
+happening automatically. The Staffing Agent matches scheduled labor to actual expected
+demand, which is the difference between overstaffing (pure cost) and understaffing
+(worse service, and eventually fewer repeat guests). None of this is a claim that
+Restaurant Sahayak runs the restaurant for you — it's that the manager-facing decisions
+it speeds up and grounds in real data are genuine, direct inputs to running the
+operation more efficiently, which is the concrete path to protecting and growing
+revenue. Being precise about what this is *not*: it does not manage a live waitlist or
+track table-turnover/kitchen-ticket time, so any story about *customer-facing wait time*
+specifically stays indirect (see [Limitations](#limitations)) — the efficiency and
+revenue story above is the direct one.
 
-## What DineOps does
+## What Restaurant Sahayak does
 
 - **Chat-style requests, correctly routed.** The manager (or the API) sends one
   natural-language task to the Orchestrator; it works out which specialist domain(s)
@@ -87,7 +92,7 @@ real-time front-of-house wait-time system.
 
 ## Architecture
 
-DineOps enforces one strict layering rule everywhere: agents and tools never see
+Restaurant Sahayak enforces one strict layering rule everywhere: agents and tools never see
 PostgreSQL, SQLAlchemy, or a raw SQL query. This is not just convention — it's checked
 by `tests/unit/test_layer_boundaries.py`, which fails if `app.agents` or `app.tools`
 imports `sqlalchemy`, `app.models`, or `app.repositories`.
@@ -186,7 +191,7 @@ of coverage for a given request a guarantee rather than a hope.
 | **LangGraph** | Orchestration and state for the Orchestrator Agent only (decide/delegate/await-approval/combine graph, with pause/resume for human approval). Specialist agents use a simpler hand-rolled tool-calling loop, not LangGraph. |
 | **PostgreSQL + pgvector** | The single database for both application data (reservations, customers, inventory, staff, sales, ...) and the `memories` table's vector column. One database, two kinds of content, one repository layer. |
 
-**DineOps does NOT use RAG.** There is no document ingestion, no chunking, no
+**Restaurant Sahayak does NOT use RAG.** There is no document ingestion, no chunking, no
 document-retrieval pipeline, and no vector search over unstructured text anywhere in
 this codebase. This is a non-negotiable project principle — see
 [`.specify/memory/constitution.md`](.specify/memory/constitution.md), Principle II.
@@ -196,7 +201,7 @@ this codebase. This is a non-negotiable project principle — see
 It's easy to conflate these because both involve embeddings and a vector column — the
 difference is what's being stored and retrieved, and why:
 
-| | RAG | DineOps' persistent memory |
+| | RAG | Restaurant Sahayak's persistent memory |
 |---|---|---|
 | **What's stored** | Chunks of unstructured documents | Structured facts: one `Memory` row = one typed fact (a customer preference, a business rule, a past decision, ...), with a `memory_type`, `topic`, `source`, `importance`, and `confidence` |
 | **Why embeddings exist** | To retrieve relevant *document text* to stuff into a prompt as unstructured context | To find relevant *facts by meaning* rather than exact keyword/topic match — a narrower, specific use of semantic similarity |
@@ -204,13 +209,13 @@ difference is what's being stored and retrieved, and why:
 | **Lifecycle** | Re-index when documents change | Deduplication on exact `(restaurant, type, scope, topic)` conflict (a re-stated fact supersedes the old one), reinforcement (confidence increases on repeated confirmation), and forgetting (soft-delete, audit-preserving) — see `app/services/memory_service.py` |
 | **What the agent gets back** | Raw document text to read and summarize | A structured fact plus a similarity score, ready to reason over directly |
 
-In short: RAG retrieves *documents*; DineOps' `MemoryService` retrieves *facts the
+In short: RAG retrieves *documents*; Restaurant Sahayak's `MemoryService` retrieves *facts the
 system was explicitly told*, semantically, from a store of structured records. No
 document ever enters this pipeline.
 
 ## Human approval for high-impact actions
 
-Some actions carry real operational or financial consequence, and DineOps does not let
+Some actions carry real operational or financial consequence, and Restaurant Sahayak does not let
 an agent execute those unilaterally. Each domain service (not the agent, not the tool)
 decides whether an action is high-impact, based on concrete, configurable thresholds:
 
@@ -308,8 +313,8 @@ build verification, on every push to `main` and every pull request.
 ### Installation
 
 ```bash
-git clone <this-repo>
-cd DineOps
+git clone https://github.com/metylerdurden/RestaurantSahayak.git
+cd RestaurantSahayak
 uv sync
 ```
 
@@ -319,7 +324,7 @@ uv sync
 cp .env.example .env
 ```
 
-`.env.example` documents every variable DineOps reads (`app/core/config.py`):
+`.env.example` documents every variable Restaurant Sahayak reads (`app/core/config.py`):
 `DATABASE_URL`, `LLM_PROVIDER`/`LLM_MODEL`/`OLLAMA_BASE_URL`, `EMBEDDING_PROVIDER`/
 `EMBEDDING_MODEL`/`EMBEDDING_DEVICE`, `OTEL_*` tracing settings, and an optional
 `API_KEY` (see [`app/api/security.py`](app/api/security.py) — unset by default for
@@ -525,9 +530,10 @@ Reasonable next steps — **not implemented**, listed as direction, not current 
   supplier communication) — via the same typed-tool pattern, not a departure from it.
 - Streaming agent responses to the dashboard instead of request/response.
 
-If the wait-time lever above is worth making direct rather than indirect, the following
-would actually move it (none of this exists today — genuinely new domains, not a
-relabeling of what's already built):
+If a *direct* customer-facing wait-time story (rather than the indirect one described
+above) is worth pursuing on top of the efficiency/revenue focus, the following would
+actually move it (none of this exists today — genuinely new domains, not a relabeling
+of what's already built):
 
 - A live waitlist/queue agent — walk-ins, estimated seating time, notify-when-ready.
 - Table-turnover prediction from historical `Reservation`/`Sale` data, feeding a real
@@ -568,7 +574,7 @@ tests/
 
 ## Spec-Driven Development
 
-DineOps was developed using a specification-first, incremental engineering
+Restaurant Sahayak was developed using a specification-first, incremental engineering
 methodology — design and requirements were written down and agreed before code, and
 the system was built up in small, independently validated increments rather than as one
 large, unstructured coding task:
@@ -636,7 +642,7 @@ smoothing over the discrepancies).
 
 ## How this project was built
 
-DineOps was not built as one large, unstructured coding task. It was divided into 20
+Restaurant Sahayak was not built as one large, unstructured coding task. It was divided into 20
 planned, sequential stages — from project initialization and specification, through one
 agent at a time, to orchestration, human approval, event-driven and autonomous
 workflows, observability, the Manager API/dashboard, and finally this production
@@ -653,5 +659,5 @@ what was originally planned. As of this writing, Steps 1–19 are fully implemen
 committed; Step 20 (this hardening and documentation pass) is in progress and not yet
 committed or pushed.
 
-Read that document if you want to understand **how** DineOps got to its current state,
+Read that document if you want to understand **how** Restaurant Sahayak got to its current state,
 in what order, and why — this README describes **what** it is now.
