@@ -33,6 +33,22 @@ def get_correlation_id() -> str | None:
     return _correlation_id_var.get()
 
 
+def get_correlation_id_uuid() -> uuid.UUID | None:
+    """The current request's correlation id as a UUID, for callers that need to
+    thread the *same* id an agent run/OTel span uses (AgentRun.correlation_id is a
+    UUID column) — not just a log line. Returns None if unset, or if an external
+    caller supplied an X-Correlation-Id that isn't a valid UUID (fine for log
+    correlation, not for a UUID column) — callers should treat None the same as
+    "no correlation id supplied" and let a fresh one be generated downstream."""
+    cid = get_correlation_id()
+    if cid is None:
+        return None
+    try:
+        return uuid.UUID(cid)
+    except ValueError:
+        return None
+
+
 def _add_correlation_id(logger, method_name, event_dict):  # noqa: ANN001, ARG001
     cid = get_correlation_id()
     if cid is not None:

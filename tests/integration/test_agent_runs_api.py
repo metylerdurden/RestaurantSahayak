@@ -117,3 +117,60 @@ async def test_get_unknown_agent_run_returns_404(db_session, monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.get("/api/v1/agent-runs/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
+
+
+async def test_http_correlation_id_is_threaded_into_the_agent_run(db_session, monkeypatch):
+    """Part 2 audit fix: the correlation id set by the HTTP middleware (and echoed
+    back on the X-Correlation-Id response header) must be the *same* id stored on
+    the resulting AgentRun/spans — not a separate one AgentRunService minted on its
+    own, which would make the response header useless for finding the run afterward."""
+    import uuid as uuid_mod
+
+    restaurant = await make_restaurant(db_session)
+    await make_user(db_session, restaurant)
+    app = build_test_app(
+        db_session,
+        monkeypatch,
+        responses=[tool_call("c0", "get_reservations", {}), final("No reservations found for that range.")],
+    )
+    sent_correlation_id = str(uuid_mod.uuid4())
+
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/v1/agent-runs",
+                json={"restaurant_id": str(restaurant.id), "agent_name": "reservation", "task": "Anything booked?"},
+                headers={"X-Correlation-Id": sent_correlation_id},
+            )
+            assert response.status_code == 200
+            assert response.headers["X-Correlation-Id"] == sent_correlation_id
+
+            run_id = response.json()["agent_run_id"]
+            run = await client.get(f"/api/v1/agent-runs/{run_id}")
+            assert run.status_code == 200
+            assert run.json()["correlation_id"] == sent_correlation_id
+
+
+async def test_a_non_uuid_correlation_id_header_does_not_break_the_request(db_session, monkeypatch):
+    """An external caller's X-Correlation-Id might not be a valid UUID (fine for log
+    correlation) — the request must still succeed, with AgentRunService minting its
+    own UUID rather than the request failing."""
+    restaurant = await make_restaurant(db_session)
+    await make_user(db_session, restaurant)
+    app = build_test_app(
+        db_session,
+        monkeypatch,
+        responses=[tool_call("c0", "get_reservations", {}), final("No reservations found for that range.")],
+    )
+
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/v1/agent-runs",
+                json={"restaurant_id": str(restaurant.id), "agent_name": "reservation", "task": "Anything booked?"},
+                headers={"X-Correlation-Id": "not-a-valid-uuid"},
+            )
+            assert response.status_code == 200
+            assert response.json()["status"] == "completed"

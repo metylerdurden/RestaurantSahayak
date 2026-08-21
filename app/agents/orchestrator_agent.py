@@ -37,6 +37,7 @@ from typing import Any, Literal, cast
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from opentelemetry.trace import Status, StatusCode
 from pydantic import ValidationError
 
 from app.agents.orchestrator_state import (
@@ -237,6 +238,10 @@ class OrchestratorAgent:
             except Exception as exc:  # the LLM/HTTP/graph boundary — never let this crash the caller
                 log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
                 span.set_attribute("success", False)
+                # Swallowed here (handle() always returns), so record it on the span
+                # explicitly — see ToolCallingAgent.handle()'s identical comment.
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
                 return await self._finalize_error(run.id, started_at, log)
 
             result = await self._finalize(final_state, run.id, started_at, log)
@@ -290,6 +295,8 @@ class OrchestratorAgent:
             except Exception as exc:
                 log.error("orchestrator.unexpected_failure", error=str(exc), exc_info=True)
                 span.set_attribute("success", False)
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
                 return await self._finalize_error(orchestrator_run_id, started_at, log)
 
             result = await self._finalize(final_state, orchestrator_run_id, started_at, log)

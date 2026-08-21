@@ -26,6 +26,8 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Literal
 
+from opentelemetry.trace import Status, StatusCode
+
 from app.core.logging import get_logger
 from app.core.telemetry import get_tracer, start_span
 from app.models import WorkflowRun
@@ -77,6 +79,8 @@ class BackgroundWorkflow(ABC):
                 log.error("workflow.failed", error=str(exc), exc_info=True)
                 workflow_run.status = "failed"
                 workflow_run.error = str(exc)
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
 
             workflow_run.completed_at = utcnow()
             workflow_run = await self.workflow_run_repo.save(workflow_run)

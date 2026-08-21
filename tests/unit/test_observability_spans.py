@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from opentelemetry.trace import StatusCode
 
 from app.agents.customer_agent import CustomerAgent
 from app.agents.orchestrator_agent import OrchestratorAgent
@@ -435,3 +436,123 @@ async def test_background_workflow_run_span_is_created(otel_spans):
     assert span.attributes["triggered_by"] == "scheduler"
     assert span.attributes["status"] == "completed"
     assert span.attributes["success"] is True
+
+
+# --- span status on failure (Part 2 audit: swallowed exceptions must still mark the
+# span ERROR via record_exception()/set_status(), not just a custom "success"
+# attribute — a trace backend filters on the real OTel status, not app-specific
+# attribute names) ---
+
+
+class BoomLLM(LLMProvider):
+    @property
+    def model_name(self) -> str:
+        return "fake-model"
+
+    async def generate(self, messages, *, temperature: float = 0.0, tools=None, **kwargs) -> LLMResponse:
+        raise RuntimeError("connection reset")
+
+    async def health_check(self) -> bool:
+        return False
+
+
+async def test_agent_run_span_gets_error_status_on_unexpected_failure(agent_run_service, otel_spans):
+    customer_service = AsyncMock(spec=CustomerService)
+    agent = CustomerAgent(llm=BoomLLM(), tools=[GetCustomerTool(customer_service)], agent_run_service=agent_run_service)
+
+    result = await agent.handle("Find Raj", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "error"  # handle() itself never raises
+    span = _spans_by_name(otel_spans)["customer_agent.run"]
+    # The exception was swallowed (handle()'s contract), so start_span()'s own
+    # except-clause never fired — the span must have been marked failed explicitly.
+    assert span.status.status_code == StatusCode.ERROR
+    assert len(span.events) == 1  # record_exception() adds an "exception" event
+    assert span.attributes["success"] is False
+
+
+async def test_orchestrator_run_span_gets_error_status_on_unexpected_failure(agent_run_service, otel_spans):
+    orchestrator = OrchestratorAgent(llm=BoomLLM(), specialists={}, agent_run_service=agent_run_service)
+
+    result = await orchestrator.handle("Are we ready for tonight?", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "error"
+    span = _spans_by_name(otel_spans)["orchestrator.run"]
+    assert span.status.status_code == StatusCode.ERROR
+    assert len(span.events) == 1
+    assert span.attributes["success"] is False
+
+
+class FailingWorkflow(BackgroundWorkflow):
+    workflow_type = "daily_briefing"
+
+    async def _execute(self, *, restaurant_id, correlation_id):
+        raise RuntimeError("the orchestrator blew up")
+
+
+async def test_workflow_run_span_gets_error_status_on_failure(otel_spans):
+    repo = AsyncMock(spec=WorkflowRunRepository)
+    repo.create.side_effect = lambda **kwargs: SimpleNamespace(
+        id=uuid.uuid4(), completed_at=None, final_result=None, error=None, **kwargs
+    )
+    repo.save.side_effect = lambda run: run
+    workflow = FailingWorkflow(workflow_run_repo=repo)
+
+    run = await workflow.run(restaurant_id=RESTAURANT_ID, triggered_by="scheduler")
+
+    assert run.status == "failed"  # run() itself never raises
+    span = _spans_by_name(otel_spans)["workflow.run"]
+    assert span.status.status_code == StatusCode.ERROR
+    assert len(span.events) == 1
+    assert span.attributes["success"] is False
+
+
+# --- no sensitive data on spans (Part 2 audit items 11/12) ---
+
+_FORBIDDEN_ATTRIBUTE_KEYS = {
+    "task",
+    "content",
+    "arguments",
+    "parameters",
+    "reason",
+    "query",
+    "prompt",
+    "input",
+    "payload",
+    "message",
+    "api_key",
+    "authorization",
+    "x-api-key",
+}
+
+
+async def test_no_span_carries_task_text_tool_arguments_or_secrets(agent_run_service, otel_spans):
+    """A realistic multi-span run (agent + tool) must never leak the task's free
+    text, a tool's raw arguments/results, or anything secret-shaped onto a span —
+    that's what structured logs/AgentMessage rows are for, not traces."""
+    customer_service = AsyncMock(spec=CustomerService)
+    customer_service.get_customer.return_value = [
+        SimpleNamespace(id=uuid.uuid4(), name="Raj Patel", phone="+15551239999", email=None, is_active=True)
+    ]
+    secret_task = "Find Raj Patel, phone +15551239999, and mention API key sk-should-never-appear-on-a-span"
+    responses = [
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="get_customer", arguments={"query": "Raj Patel"})],
+        ),
+        LLMResponse(content="Found Raj.", model="fake-model"),
+    ]
+    agent = CustomerAgent(
+        llm=ScriptedLLM(responses), tools=[GetCustomerTool(customer_service)], agent_run_service=agent_run_service
+    )
+
+    await agent.handle(secret_task, restaurant_id=RESTAURANT_ID)
+
+    for span in otel_spans.get_finished_spans():
+        for key, value in span.attributes.items():
+            assert key.lower() not in _FORBIDDEN_ATTRIBUTE_KEYS, f"{span.name} carries a disallowed key: {key}"
+            if isinstance(value, str):
+                assert "Raj Patel" not in value, f"{span.name}.{key} leaked the task text"
+                assert "sk-should-never-appear" not in value, f"{span.name}.{key} leaked a secret-shaped value"
+                assert "+15551239999" not in value, f"{span.name}.{key} leaked a phone number"

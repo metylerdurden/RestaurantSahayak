@@ -21,6 +21,7 @@ import time
 import uuid
 from typing import Any, Literal
 
+from opentelemetry.trace import Status, StatusCode
 from pydantic import ValidationError
 
 from app.agents.state import AgentErrorInfo, AgentResult, AgentState, ToolCallRecord
@@ -116,6 +117,13 @@ class ToolCallingAgent:
                 log.error("agent.unexpected_failure", error=str(exc), exc_info=True)
                 state.error = AgentErrorInfo(code="internal_error", message="Unexpected internal error.")
                 status = "error"
+                # This exception is deliberately swallowed, not re-raised (handle()'s
+                # contract is to always return) — start_span()'s own except-clause
+                # never runs, so the span must be marked failed explicitly here,
+                # the same way app.services.event_bus._dispatch_one already does for
+                # its own swallowed handler failures.
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
 
             latency_ms = int((time.monotonic() - started_at) * 1000)
             summary = state.final_content or (state.error.message if state.error else "No result produced.")

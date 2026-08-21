@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db_session
 from app.api.manager_context import resolve_initiated_by_user_id
 from app.api.stack import build_agent_stack
+from app.core.logging import get_correlation_id_uuid
 from app.schemas.agent_run import AgentRunDTO, AgentRunNode, TriggerAgentRunInput, TriggerAgentRunOutput
 from app.schemas.workflow_run import AgentRunSummaryDTO
 from app.tools.base import ToolError
@@ -40,9 +41,19 @@ async def trigger_agent_run(
     except ToolError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
 
+    # Thread this HTTP request's own correlation id (set by the middleware in
+    # app.main, already on the request's root span and X-Correlation-Id response
+    # header) into the agent run itself, rather than letting AgentRunService mint an
+    # unrelated one — otherwise the id a caller can see on the HTTP response is
+    # useless for finding the corresponding AgentRun rows/spans afterward.
+    correlation_id = get_correlation_id_uuid()
+
     if body.agent_name == "orchestrator":
         result = await stack.orchestrator.handle(
-            body.task, restaurant_id=body.restaurant_id, initiated_by_user_id=initiated_by_user_id
+            body.task,
+            restaurant_id=body.restaurant_id,
+            initiated_by_user_id=initiated_by_user_id,
+            correlation_id=correlation_id,
         )
         return TriggerAgentRunOutput(
             agent_run_id=result.orchestrator_run_id,
@@ -53,7 +64,10 @@ async def trigger_agent_run(
 
     specialist = getattr(stack, f"{body.agent_name}_agent")
     result = await specialist.handle(
-        body.task, restaurant_id=body.restaurant_id, initiated_by_user_id=initiated_by_user_id
+        body.task,
+        restaurant_id=body.restaurant_id,
+        initiated_by_user_id=initiated_by_user_id,
+        correlation_id=correlation_id,
     )
     return TriggerAgentRunOutput(
         agent_run_id=result.agent_run_id,
