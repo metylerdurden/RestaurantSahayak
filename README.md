@@ -1,10 +1,13 @@
 # DineOps
 
-**An agentic AI restaurant operations platform.** A restaurant manager talks to a
-chat-style Orchestrator Agent, which reasons about the request and delegates it to the
-right specialist agent(s) — Reservation, Customer, Inventory, Staffing, or Analytics —
-each of which acts on the system exclusively through typed tools, never through raw SQL
-or document retrieval.
+**An agentic AI restaurant operations platform, built spec-driven** — planned and
+specified before any code was written, then implemented in sequential, documented
+steps (see [Spec-Driven Development](#spec-driven-development) and
+[docs/DEVELOPMENT_ROADMAP.md](docs/DEVELOPMENT_ROADMAP.md)). A restaurant manager talks
+to a chat-style Orchestrator Agent, which reasons about the request and delegates it to
+the right specialist agent(s) — Reservation, Customer, Inventory, Staffing, or
+Analytics — each of which acts on the system exclusively through typed tools, never
+through raw SQL or document retrieval.
 
 ## Table of contents
 
@@ -40,6 +43,18 @@ language, and have a coordinated set of AI agents go check the actual operationa
 reason about what matters, remember relevant context across conversations, and — for
 anything with real consequence — come back for a human decision rather than act
 unilaterally.
+
+**Why this matters operationally**: the faster a manager can resolve these
+cross-cutting questions, the faster the decisions that actually affect service happen —
+adequate staffing confirmed before the dinner rush, a stockout caught before it forces a
+mid-service substitution, a table's real availability checked before a party is seated
+somewhere that will need to turn over again in ten minutes. That is a genuine, if
+indirect, lever on customer-facing wait time: DineOps speeds up the manager-side
+decisions that are real inputs to smooth, fast service. It is worth being precise about
+what this is *not*, though — there is no live host-stand or waitlist view, no
+table-turnover tracking, and no kitchen-ticket timing today (see
+[Limitations](#limitations)); this is a back-office decision-support layer, not a
+real-time front-of-house wait-time system.
 
 ## What DineOps does
 
@@ -509,6 +524,19 @@ Reasonable next steps — **not implemented**, listed as direction, not current 
 - Additional specialist agents or tools within existing domains (e.g. menu management,
   supplier communication) — via the same typed-tool pattern, not a departure from it.
 - Streaming agent responses to the dashboard instead of request/response.
+
+If the wait-time lever above is worth making direct rather than indirect, the following
+would actually move it (none of this exists today — genuinely new domains, not a
+relabeling of what's already built):
+
+- A live waitlist/queue agent — walk-ins, estimated seating time, notify-when-ready.
+- Table-turnover prediction from historical `Reservation`/`Sale` data, feeding a real
+  "next available table" estimate instead of static reservation slots.
+- Reservation pacing that accounts for average table-turn time when accepting a booking
+  for a given slot, rather than treating every slot as independent.
+- Kitchen ticket-time tracking (requires a POS/KDS data source this project doesn't
+  have yet) correlated with the Staffing Agent's own requirement predictions, to flag
+  *why* a night is running slow, not just that it is.
 
 ## Project structure
 
