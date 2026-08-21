@@ -21,6 +21,7 @@ from app.services.agent_run_service import AgentRunService
 from app.services.inventory_service import InventoryService
 from app.tools.base import PendingApprovalOutput
 from app.tools.inventory_tools import (
+    AnalyzeInventoryTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -86,6 +87,7 @@ def inventory_service():
 @pytest.fixture
 def tools(inventory_service):
     return [
+        AnalyzeInventoryTool(inventory_service),
         GetInventoryTool(inventory_service),
         CheckStockTool(inventory_service),
         CalculateRequiredInventoryTool(inventory_service),
@@ -98,6 +100,7 @@ def test_inventory_agent_is_named_and_prompted_correctly(agent_run_service, tool
     assert agent.name == "inventory"
     assert agent.system_prompt == INVENTORY_AGENT_SYSTEM_PROMPT
     assert set(agent.tools) == {
+        "analyze_inventory",
         "get_inventory",
         "check_stock",
         "calculate_required_inventory",
@@ -197,5 +200,85 @@ async def test_out_of_stock_item_reported_plainly(agent_run_service, tools, inve
     result = await agent.handle("Is anything out of stock?", restaurant_id=RESTAURANT_ID)
 
     assert result.status == "completed"
-    assert result.tool_calls[0].output["items"] == []
-    assert "nothing" in result.summary.lower() or "out of stock" in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_status_check_uses_one_analyze_call_and_reports_findings_proactively(
+    agent_run_service, tools, inventory_service
+):
+    """The scenario from the original bad trace: 'Check current stock levels and
+    identify any items that are low or out of stock.' Fixed behavior is ONE
+    analyze_inventory call (not two get_inventory calls) whose already-computed
+    severity/reorder numbers the agent reports directly — not 'would you like me to
+    calculate?'."""
+    from app.services.inventory_service import InventoryAlert
+
+    basil = _item(name="Fresh Basil", unit="kg", quantity_on_hand=Decimal("0"), low_stock_threshold=Decimal("1"))
+    wine = _item(
+        name="House White Wine", unit="bottle", quantity_on_hand=Decimal("3"), low_stock_threshold=Decimal("6")
+    )
+    inventory_service.analyze_inventory.return_value = (
+        [
+            InventoryAlert(basil, "out_of_stock", "critical", True, Decimal("5"), True, None),
+            InventoryAlert(wine, "low", "warning", True, Decimal("12"), True, None),
+        ],
+        1,
+        1,
+        True,
+    )
+
+    responses = [
+        LLMResponse(
+            content="", model="fake-model", tool_calls=[ToolCall(id="c0", name="analyze_inventory", arguments={})]
+        ),
+        LLMResponse(
+            content=(
+                "Inventory requires attention.\n\nCRITICAL\n- Fresh Basil: OUT OF STOCK — 0 kg on hand, "
+                "threshold 1 kg. Recommended reorder: 5 kg.\n\nWARNING\n- House White Wine: LOW — 3 bottles "
+                "on hand, threshold 6 bottles. Recommended reorder: 12 bottles."
+            ),
+            model="fake-model",
+        ),
+    ]
+    agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
+
+    result = await agent.handle(
+        "Check current stock levels and identify any items that are low or out of stock.",
+        restaurant_id=RESTAURANT_ID,
+    )
+
+    assert result.status == "completed"
+    assert [tc.tool_name for tc in result.tool_calls] == ["analyze_inventory"]  # one call, not get_inventory x2
+    assert "would you like" not in result.summary.lower()
+    assert "5 kg" in result.summary and "12 bottles" in result.summary  # real numbers, not omitted
+    # the structured findings flow to the orchestrator via AgentResult.data (the last
+    # tool call's output), not just buried in free text
+    assert result.data["critical_count"] == 1
+    assert result.data["warning_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_inventory_tool_failure_is_a_controlled_failure_not_a_hallucination(
+    agent_run_service, tools, inventory_service
+):
+    """TEST 10: the inventory service is unavailable -> the agent must report a
+    genuine, tool-sourced failure, never fabricate stock data to answer anyway."""
+    inventory_service.analyze_inventory.side_effect = RuntimeError("database connection lost")
+
+    responses = [
+        LLMResponse(
+            content="", model="fake-model", tool_calls=[ToolCall(id="c0", name="analyze_inventory", arguments={})]
+        ),
+        LLMResponse(content="I couldn't retrieve current inventory data due to an internal error.", model="fake-model"),
+    ]
+    agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
+
+    result = await agent.handle("What's low on stock?", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "completed"  # the agent itself never crashes
+    # ToolCallingAgent only records *successful* tool calls in state.tool_calls (see
+    # _execute_tool_call) — a failed call never lands there, so no fabricated
+    # structured data reaches AgentResult.data or result.tool_calls either.
+    assert result.tool_calls == []
+    assert result.data is None
+    assert "couldn't" in result.summary.lower() or "error" in result.summary.lower()

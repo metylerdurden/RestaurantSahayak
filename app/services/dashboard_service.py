@@ -69,12 +69,7 @@ class DashboardService:
         )
         expected_covers = sum(r.party_size for r in reservations if r.status in ACTIVE_RESERVATION_STATUSES)
 
-        low_stock = await self.inventory_service.get_inventory(
-            restaurant_id=restaurant_id, status="low", name_contains=None
-        )
-        out_of_stock = await self.inventory_service.get_inventory(
-            restaurant_id=restaurant_id, status="out_of_stock", name_contains=None
-        )
+        inventory_alerts = await self.inventory_service.list_alerts(restaurant_id=restaurant_id)
 
         shift_rows = await self.staffing_service.get_staff_schedule(
             restaurant_id=restaurant_id, date_from=day_start, date_to=day_end
@@ -110,7 +105,7 @@ class DashboardService:
             manager_user_id=manager.id if manager else None,
             today_reservations=[ReservationDTO.model_validate(r) for r in reservations],
             expected_covers=expected_covers,
-            inventory_alerts=[InventoryItemDTO.model_validate(i) for i in [*out_of_stock, *low_stock]],
+            inventory_alerts=[InventoryItemDTO.model_validate(i) for i in inventory_alerts],
             staffing_alerts=staffing_alerts,
             pending_approvals=[ApprovalDTO.model_validate(a) for a in pending_approvals],
             recent_agent_activity=[AgentRunSummaryDTO.model_validate(r) for r in recent_agent_activity],

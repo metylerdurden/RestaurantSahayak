@@ -48,6 +48,7 @@ from app.services.workflow_run_service import WorkflowRunService
 from app.tools.analytics_tools import GetDailySalesTool, GetItemSalesTool, GetNoShowRateTool
 from app.tools.customer_tools import GetCustomerHistoryTool, GetCustomerTool, UpdateCustomerTool
 from app.tools.inventory_tools import (
+    AnalyzeInventoryTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -173,6 +174,7 @@ def build_agent_stack(session: AsyncSession) -> AgentStack:
     inventory_agent = InventoryAgent(
         llm=llm,
         tools=[
+            AnalyzeInventoryTool(inventory_service),
             GetInventoryTool(inventory_service),
             CheckStockTool(inventory_service),
             CalculateRequiredInventoryTool(inventory_service),

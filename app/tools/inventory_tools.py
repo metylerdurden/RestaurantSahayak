@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.schemas.inventory import (
+    AnalyzeInventoryInput,
+    AnalyzeInventoryOutput,
     CalculateRequiredInventoryInput,
     CalculateRequiredInventoryOutput,
     CheckStockInput,
@@ -11,6 +13,7 @@ from app.schemas.inventory import (
     CreatePurchaseRequestOutput,
     GetInventoryInput,
     GetInventoryOutput,
+    InventoryAlertDTO,
     InventoryItemDTO,
     PurchaseRequestDTO,
 )
@@ -80,6 +83,43 @@ class CalculateRequiredInventoryTool(Tool[CalculateRequiredInventoryInput, Calcu
             projected_quantity_at_horizon=projected,
             recommended_order_quantity=recommended,
             lookback_days_used=lookback_days,
+        )
+
+
+class AnalyzeInventoryTool(Tool[AnalyzeInventoryInput, AnalyzeInventoryOutput]):
+    name = "analyze_inventory"
+    description = (
+        "Get every inventory item that is currently low or out of stock, in one call, "
+        "already classified by severity (critical/warning) with a recommended reorder "
+        "quantity computed from actual usage where possible. Use this instead of calling "
+        "get_inventory multiple times with different status filters."
+    )
+    input_model = AnalyzeInventoryInput
+    output_model = AnalyzeInventoryOutput
+
+    def __init__(self, service: InventoryService) -> None:
+        self.service = service
+
+    async def run(self, input: AnalyzeInventoryInput, *, context: ToolContext) -> AnalyzeInventoryOutput:
+        alerts, critical_count, warning_count, action_required = await self.service.analyze_inventory(
+            restaurant_id=context.restaurant_id, days_ahead=input.days_ahead
+        )
+        return AnalyzeInventoryOutput(
+            alerts=[
+                InventoryAlertDTO(
+                    item=InventoryItemDTO.model_validate(a.item),
+                    status=a.status,
+                    severity=a.severity,
+                    action_required=a.action_required,
+                    recommended_reorder_quantity=a.recommended_reorder_quantity,
+                    reorder_quantity_available=a.reorder_quantity_available,
+                    reason=a.reason,
+                )
+                for a in alerts
+            ],
+            critical_count=critical_count,
+            warning_count=warning_count,
+            action_required=action_required,
         )
 
 

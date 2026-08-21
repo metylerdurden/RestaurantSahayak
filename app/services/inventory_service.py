@@ -14,7 +14,9 @@ simplification, not a hidden guess.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
@@ -25,6 +27,31 @@ from app.repositories.inventory_repo import InventoryRepository
 from app.services.approval_service import ApprovalService
 from app.services.event_bus import EventBus
 from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
+
+# Deterministic status/severity rules (Constitution: the application, not the LLM,
+# owns business-critical numbers and classifications). Matches the exact formula
+# already used independently by scripts/seed.py and tests/integration/factories.py —
+# centralized here so analyze_inventory/list_alerts, the dashboard, and the
+# /inventory/alerts route all agree with each other by construction.
+_SEVERITY_BY_STATUS = {"out_of_stock": "critical", "low": "warning", "ok": "none"}
+
+
+@dataclass(frozen=True)
+class InventoryAlert:
+    """One flagged item plus its deterministic severity and (when computable) a
+    reorder recommendation — the structured unit both AnalyzeInventoryTool and any
+    future non-agent caller build their output from. Never constructed with a
+    hallucinated number: recommended_reorder_quantity is either a real result of
+    calculate_required_inventory or None with reorder_quantity_available=False and a
+    concrete reason."""
+
+    item: InventoryItem
+    status: str
+    severity: str
+    action_required: bool
+    recommended_reorder_quantity: Decimal | None
+    reorder_quantity_available: bool
+    reason: str | None
 
 
 class InventoryService:
@@ -70,6 +97,55 @@ class InventoryService:
         self, *, restaurant_id: uuid.UUID, status: str | None, name_contains: str | None
     ) -> list[InventoryItem]:
         return await self.repo.list_items(restaurant_id, status=status, name_contains=name_contains)
+
+    def _classify(self, item: InventoryItem) -> tuple[str, str, bool]:
+        """status, severity, action_required — recomputed from quantity_on_hand vs
+        low_stock_threshold rather than trusted from item.status: nothing in this
+        service currently keeps that stored column in sync when quantity changes, so
+        the numeric fields (enforced non-negative by a DB constraint) are the only
+        value actually safe to treat as the source of truth."""
+        if item.quantity_on_hand <= 0:
+            status = "out_of_stock"
+        elif item.quantity_on_hand <= item.low_stock_threshold:
+            status = "low"
+        else:
+            status = "ok"
+        return status, _SEVERITY_BY_STATUS[status], status != "ok"
+
+    async def list_alerts(self, *, restaurant_id: uuid.UUID) -> list[InventoryItem]:
+        """Every item currently out of stock or low, fetched with a single query —
+        the shared source of truth for the Inventory Agent's analysis, the dashboard's
+        inventory_alerts panel, and GET /inventory/alerts, replacing what used to be
+        three independent copies of a two-call (status="out_of_stock" then
+        status="low") pattern."""
+        items = await self.repo.list_items(restaurant_id, status=None, name_contains=None)
+        flagged = [i for i in items if self._classify(i)[2]]
+        flagged.sort(key=lambda i: (self._classify(i)[0] != "out_of_stock", i.name))
+        return flagged
+
+    async def _build_alert(self, item: InventoryItem, *, days_ahead: int) -> InventoryAlert:
+        status, severity, action_required = self._classify(item)
+        try:
+            _, _, _, recommended, _ = await self.calculate_required_inventory(
+                restaurant_id=item.restaurant_id, item_id=item.id, days_ahead=days_ahead
+            )
+            return InventoryAlert(item, status, severity, action_required, recommended, True, None)
+        except ToolError as exc:
+            return InventoryAlert(item, status, severity, action_required, None, False, exc.message)
+
+    async def analyze_inventory(
+        self, *, restaurant_id: uuid.UUID, days_ahead: int = 7
+    ) -> tuple[list[InventoryAlert], int, int, bool]:
+        """The single deterministic pass behind AnalyzeInventoryTool: one query for
+        every item needing attention, then a reorder recommendation for each
+        (independent per-item reads, run concurrently rather than as N sequential
+        round trips). Severity counts and action_required are computed here, not by
+        the LLM, from real tool/DB output only."""
+        flagged_items = await self.list_alerts(restaurant_id=restaurant_id)
+        alerts = list(await asyncio.gather(*(self._build_alert(item, days_ahead=days_ahead) for item in flagged_items)))
+        critical_count = sum(1 for a in alerts if a.severity == "critical")
+        warning_count = sum(1 for a in alerts if a.severity == "warning")
+        return alerts, critical_count, warning_count, bool(alerts)
 
     async def check_stock(
         self,
@@ -136,6 +212,19 @@ class InventoryService:
         context: ToolContext,
     ) -> PurchaseRequest | PendingApprovalOutput:
         await self._get_item_or_raise(restaurant_id, item_id)
+
+        # Idempotency: a second proposal for the same still-open shortage (e.g. the
+        # inventory-check workflow running twice before anything has actually
+        # changed the item's quantity) must not create a second PurchaseRequest/
+        # Approval — it reports the existing open one instead of mutating again.
+        existing = await self.repo.get_open_purchase_request_for_item(item_id)
+        if existing is not None:
+            if existing.status == "pending_approval" and existing.approval_id is not None:
+                return PendingApprovalOutput(
+                    approval_id=existing.approval_id,
+                    summary=f"A purchase request for this item is already pending approval ({existing.approval_id}).",
+                )
+            return existing
 
         high_impact = (
             estimated_cost is not None and estimated_cost >= self.settings.purchase_request_high_impact_cost_threshold

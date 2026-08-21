@@ -36,8 +36,5 @@ async def get_inventory_alerts(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[InventoryItemDTO]:
     stack = build_agent_stack(session)
-    out_of_stock = await stack.inventory_service.get_inventory(
-        restaurant_id=restaurant_id, status="out_of_stock", name_contains=None
-    )
-    low = await stack.inventory_service.get_inventory(restaurant_id=restaurant_id, status="low", name_contains=None)
-    return [InventoryItemDTO.model_validate(i) for i in [*out_of_stock, *low]]
+    alerts = await stack.inventory_service.list_alerts(restaurant_id=restaurant_id)
+    return [InventoryItemDTO.model_validate(i) for i in alerts]

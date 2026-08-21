@@ -81,3 +81,31 @@ class CreatePurchaseRequestInput(BaseModel):
 
 class CreatePurchaseRequestOutput(BaseModel):
     purchase_request: PurchaseRequestDTO
+
+
+# --- analyze_inventory ---
+
+
+class InventoryAlertDTO(BaseModel):
+    """One out-of-stock or low item plus its deterministic severity and (when
+    computable) a reorder recommendation. Composes InventoryItemDTO rather than
+    repeating its fields."""
+
+    item: InventoryItemDTO
+    status: str
+    severity: str
+    action_required: bool
+    recommended_reorder_quantity: Decimal | None
+    reorder_quantity_available: bool
+    reason: str | None = None
+
+
+class AnalyzeInventoryInput(BaseModel):
+    days_ahead: int = Field(default=7, gt=0, le=90)
+
+
+class AnalyzeInventoryOutput(BaseModel):
+    alerts: list[InventoryAlertDTO]
+    critical_count: int
+    warning_count: int
+    action_required: bool

@@ -15,6 +15,7 @@ from app.services.approval_service import ApprovalService
 from app.services.inventory_service import InventoryService
 from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
 from app.tools.inventory_tools import (
+    AnalyzeInventoryTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -126,3 +127,83 @@ async def test_create_purchase_request_low_cost_auto_approves(db_session):
         {"item_id": str(item.id), "requested_quantity": "5", "estimated_cost": "20"}, context=context
     )
     assert output.purchase_request.status == "approved"
+
+
+async def test_create_purchase_request_rejected_leaves_it_unexecuted(db_session):
+    """TEST 8: manager rejects the proposed purchase -> the request is never executed
+    (it stays exactly as it was when raised, not silently mutated to 'approved')."""
+    service, approval_service = await _build(db_session)
+    restaurant = await make_restaurant(db_session)
+    user = await make_user(db_session, restaurant)
+    agent_run = await make_agent_run(db_session, restaurant, user, agent_name="inventory")
+    item = await make_inventory_item(db_session, restaurant)
+    context = ToolContext(
+        restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory", agent_run_id=agent_run.id
+    )
+
+    result = await CreatePurchaseRequestTool(service)(
+        {"item_id": str(item.id), "requested_quantity": "100", "estimated_cost": "500"}, context=context
+    )
+    assert isinstance(result, PendingApprovalOutput)
+
+    await approval_service.reject(result.approval_id, user.id)
+
+    stored = await service.repo.get_open_purchase_request_for_item(item.id)
+    assert stored is not None
+    assert stored.status == "pending_approval"  # not "approved" — rejection never executes
+
+
+async def test_duplicate_purchase_request_for_the_same_open_shortage_is_not_created_twice(db_session):
+    """TEST 11: proposing a purchase request for an item that already has one open
+    (e.g. the inventory-check workflow running twice before anything restocks the
+    item) must not create a second PurchaseRequest/Approval."""
+    service, approval_service = await _build(db_session)
+    restaurant = await make_restaurant(db_session)
+    user = await make_user(db_session, restaurant)
+    agent_run = await make_agent_run(db_session, restaurant, user, agent_name="inventory")
+    item = await make_inventory_item(db_session, restaurant, quantity_on_hand=0, low_stock_threshold=5)
+    context = ToolContext(
+        restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory", agent_run_id=agent_run.id
+    )
+
+    first = await CreatePurchaseRequestTool(service)(
+        {"item_id": str(item.id), "requested_quantity": "40", "estimated_cost": "600"}, context=context
+    )
+    second = await CreatePurchaseRequestTool(service)(
+        {"item_id": str(item.id), "requested_quantity": "40", "estimated_cost": "600"}, context=context
+    )
+
+    assert isinstance(first, PendingApprovalOutput)
+    assert isinstance(second, PendingApprovalOutput)
+    assert first.approval_id == second.approval_id  # the same open approval, not a new one
+
+    from sqlalchemy import select as _select
+
+    from app.models import PurchaseRequest as _PurchaseRequest
+
+    rows = (
+        (await db_session.execute(_select(_PurchaseRequest).where(_PurchaseRequest.item_id == item.id))).scalars().all()
+    )
+    assert len(rows) == 1
+
+
+async def test_analyze_inventory_tool_returns_classified_alerts_in_one_call(db_session):
+    service, _ = await _build(db_session)
+    restaurant = await make_restaurant(db_session)
+    await make_inventory_item(db_session, restaurant, name="Fresh Basil", quantity_on_hand=0, low_stock_threshold=1)
+    await make_inventory_item(
+        db_session, restaurant, name="House White Wine", quantity_on_hand=3, low_stock_threshold=6
+    )
+    await make_inventory_item(db_session, restaurant, name="Rice", quantity_on_hand=20, low_stock_threshold=2)
+    context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory")
+
+    output = await AnalyzeInventoryTool(service)({}, context=context)
+
+    assert output.critical_count == 1
+    assert output.warning_count == 1
+    assert output.action_required is True
+    names = {a.item.name for a in output.alerts}
+    assert names == {"Fresh Basil", "House White Wine"}  # well-stocked "Rice" is not in the alert list
+    basil = next(a for a in output.alerts if a.item.name == "Fresh Basil")
+    assert basil.severity == "critical"
+    assert basil.reorder_quantity_available is True

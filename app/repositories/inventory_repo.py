@@ -53,3 +53,19 @@ class InventoryRepository(BaseRepository):
 
     async def get_purchase_request(self, purchase_request_id: uuid.UUID) -> PurchaseRequest | None:
         return await self.session.get(PurchaseRequest, purchase_request_id)
+
+    async def get_open_purchase_request_for_item(self, item_id: uuid.UUID) -> PurchaseRequest | None:
+        """The most recent not-yet-resolved request for this item (draft/pending_approval/
+        approved — 'approved' still counts as open since nothing yet marks a request
+        'fulfilled'), used to stop a second reorder proposal for the same shortage
+        from creating a duplicate PurchaseRequest/Approval."""
+        stmt = (
+            select(PurchaseRequest)
+            .where(
+                PurchaseRequest.item_id == item_id,
+                PurchaseRequest.status.in_(("draft", "pending_approval", "approved")),
+            )
+            .order_by(PurchaseRequest.created_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalars().first()

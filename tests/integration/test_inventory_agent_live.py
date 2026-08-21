@@ -21,6 +21,7 @@ from app.services.agent_run_service import AgentRunService
 from app.services.approval_service import ApprovalService
 from app.services.inventory_service import InventoryService
 from app.tools.inventory_tools import (
+    AnalyzeInventoryTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -44,6 +45,7 @@ def _build_agent(db_session, llm, *, max_iterations: int = 8) -> InventoryAgent:
     service = InventoryService(InventoryRepository(db_session), approval_service, get_settings())
     agent_run_service = AgentRunService(AgentRunRepository(db_session))
     tools = [
+        AnalyzeInventoryTool(service),
         GetInventoryTool(service),
         CheckStockTool(service),
         CalculateRequiredInventoryTool(service),
@@ -74,7 +76,10 @@ async def test_low_stock_item_is_detected_and_flagged(db_session, llm):
     )
 
     assert result.status != "error", result.summary
-    assert "get_inventory" in _tool_names(result), result.summary
+    # analyze_inventory is now the prompt's preferred tool for a general status
+    # check (it classifies severity and computes reorder quantities in one call);
+    # tolerate get_inventory too rather than pin the model's exact tool choice.
+    assert _tool_names(result) & {"analyze_inventory", "get_inventory"}, result.summary
     summary_lower = result.summary.lower()
     assert "wine" in summary_lower or "low" in summary_lower or "short" in summary_lower, result.summary
 
@@ -93,4 +98,32 @@ async def test_well_stocked_inventory_is_not_flagged_as_a_shortage(db_session, l
     )
 
     assert result.status != "error", result.summary
-    assert "get_inventory" in _tool_names(result), result.summary
+    # analyze_inventory is now the prompt's preferred tool for a general status
+    # check (it classifies severity and computes reorder quantities in one call);
+    # tolerate get_inventory too rather than pin the model's exact tool choice.
+    assert _tool_names(result) & {"analyze_inventory", "get_inventory"}, result.summary
+
+
+async def test_status_check_proactively_reports_findings_instead_of_asking_to_calculate(db_session, llm):
+    """The exact scenario that motivated this fix: 'Check current stock levels and
+    identify any items that are low or out of stock.' The agent must report the real
+    quantities/severities/reorder numbers it already has, not end with a question
+    like 'would you like me to calculate the required quantities?'."""
+    restaurant = await make_restaurant(db_session)
+    user = await make_user(db_session, restaurant)
+    await make_inventory_item(db_session, restaurant, name="Fresh Basil", quantity_on_hand=0, low_stock_threshold=1)
+    await make_inventory_item(
+        db_session, restaurant, name="House White Wine", quantity_on_hand=3, low_stock_threshold=6
+    )
+
+    agent = _build_agent(db_session, llm)
+    result = await agent.handle(
+        "Check current stock levels and identify any items that are low or out of stock.",
+        restaurant_id=restaurant.id,
+        initiated_by_user_id=user.id,
+    )
+
+    assert result.status != "error", result.summary
+    summary_lower = result.summary.lower()
+    assert "basil" in summary_lower or "wine" in summary_lower, result.summary
+    assert "would you like" not in summary_lower, result.summary
