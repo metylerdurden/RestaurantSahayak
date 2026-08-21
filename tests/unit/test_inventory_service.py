@@ -296,3 +296,97 @@ async def test_reorder_quantity_calculated_deterministically_when_data_exists():
     # target buffer = threshold*2 = 4; recommended = 4 - (-7) = 11.
     assert alerts[0].reorder_quantity_available is True
     assert alerts[0].recommended_reorder_quantity == Decimal("11")
+
+
+@pytest.mark.asyncio
+async def test_no_inventory_items_exist_yields_no_alerts():
+    """TASK 7: a restaurant with no inventory rows at all -> empty, not an error."""
+    repo = AsyncMock(spec=InventoryRepository)
+    repo.list_items.return_value = []
+    service = InventoryService(repo, AsyncMock(spec=ApprovalService), _settings())
+
+    alerts, critical_count, warning_count, action_required = await service.analyze_inventory(
+        restaurant_id=RESTAURANT_ID
+    )
+
+    assert alerts == []
+    assert critical_count == 0
+    assert warning_count == 0
+    assert action_required is False
+
+
+@pytest.mark.asyncio
+async def test_calculate_reorder_quantity_is_deterministic_and_ignores_usage_history():
+    """TASK 3: target_quantity (2x threshold) minus current, floored at zero — no
+    transaction lookup involved at all, unlike calculate_required_inventory."""
+    repo = AsyncMock(spec=InventoryRepository)
+    item = _item(name="Fresh Basil", unit="kg", quantity_on_hand=Decimal("0"), low_stock_threshold=Decimal("1"))
+    repo.get_item.return_value = item
+    service = InventoryService(repo, AsyncMock(spec=ApprovalService), _settings())
+
+    result_item, target_quantity, recommended = await service.calculate_reorder_quantity(
+        restaurant_id=RESTAURANT_ID, item_id=item.id
+    )
+
+    assert target_quantity == Decimal("2")  # threshold(1) * 2
+    assert recommended == Decimal("2")  # target(2) - current(0)
+    repo.list_transactions_since.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_calculate_reorder_quantity_never_goes_negative_for_well_stocked_items():
+    repo = AsyncMock(spec=InventoryRepository)
+    item = _item(quantity_on_hand=Decimal("20"), low_stock_threshold=Decimal("5"))
+    repo.get_item.return_value = item
+    service = InventoryService(repo, AsyncMock(spec=ApprovalService), _settings())
+
+    _, target_quantity, recommended = await service.calculate_reorder_quantity(
+        restaurant_id=RESTAURANT_ID, item_id=item.id
+    )
+
+    assert target_quantity == Decimal("10")
+    assert recommended == Decimal("0")  # already above target — never a negative "reorder"
+
+
+@pytest.mark.asyncio
+async def test_calculate_reorder_quantity_raises_for_unknown_item():
+    """TASK 7: reorder calculation failure -> a real, typed error, not a guess."""
+    repo = AsyncMock(spec=InventoryRepository)
+    repo.get_item.return_value = None
+    service = InventoryService(repo, AsyncMock(spec=ApprovalService), _settings())
+
+    with pytest.raises(ToolError) as exc_info:
+        await service.calculate_reorder_quantity(restaurant_id=RESTAURANT_ID, item_id=uuid.uuid4())
+    assert exc_info.value.code == "item_not_found"
+
+
+@pytest.mark.asyncio
+async def test_create_purchase_request_approval_reason_includes_item_context():
+    """TASK 4: the approval a manager reviews must say which item, how much is on
+    hand, and against what threshold — not just a bare quantity/cost."""
+    repo = AsyncMock(spec=InventoryRepository)
+    item = _item(name="Truffle Oil", unit="bottle", quantity_on_hand=Decimal("1"), low_stock_threshold=Decimal("5"))
+    repo.get_item.return_value = item
+    repo.get_open_purchase_request_for_item.return_value = None
+    pr_stub = type("PR", (), {"id": uuid.uuid4(), "approval_id": None})()
+    repo.create_purchase_request.return_value = pr_stub
+    approval_service = AsyncMock(spec=ApprovalService)
+    approval_stub = type("Approval", (), {"id": uuid.uuid4(), "reason": "placeholder"})()
+    approval_service.create_approval_request.return_value = approval_stub
+    service = InventoryService(repo, approval_service, _settings())
+
+    await service.create_purchase_request(
+        restaurant_id=RESTAURANT_ID,
+        item_id=item.id,
+        requested_quantity=Decimal("40"),
+        estimated_cost=Decimal("600"),
+        context=_context(agent_run_id=uuid.uuid4()),
+    )
+
+    _, kwargs = approval_service.create_approval_request.call_args
+    assert kwargs["domain"] == "purchase"
+    assert "Truffle Oil" in kwargs["reason"]
+    assert kwargs["parameters"]["item_name"] == "Truffle Oil"
+    assert kwargs["parameters"]["current_quantity"] == "1"
+    assert kwargs["parameters"]["low_stock_threshold"] == "5"
+    assert kwargs["parameters"]["recommended_quantity"] == "40"

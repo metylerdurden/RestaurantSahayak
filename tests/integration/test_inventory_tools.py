@@ -16,6 +16,7 @@ from app.services.inventory_service import InventoryService
 from app.tools.base import PendingApprovalOutput, ToolContext, ToolError, utcnow
 from app.tools.inventory_tools import (
     AnalyzeInventoryTool,
+    CalculateReorderQuantityTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -207,3 +208,33 @@ async def test_analyze_inventory_tool_returns_classified_alerts_in_one_call(db_s
     basil = next(a for a in output.alerts if a.item.name == "Fresh Basil")
     assert basil.severity == "critical"
     assert basil.reorder_quantity_available is True
+
+
+async def test_calculate_reorder_quantity_tool_end_to_end(db_session):
+    service, _ = await _build(db_session)
+    restaurant = await make_restaurant(db_session)
+    item = await make_inventory_item(
+        db_session, restaurant, name="Fresh Basil", quantity_on_hand=0, low_stock_threshold=1
+    )
+    context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory")
+
+    output = await CalculateReorderQuantityTool(service)({"item_id": str(item.id)}, context=context)
+
+    assert output.item_name == "Fresh Basil"
+    assert output.current_quantity == Decimal("0")
+    assert output.threshold == Decimal("1")
+    assert output.target_quantity == Decimal("2")
+    assert output.recommended_order_quantity == Decimal("2")
+    assert output.unit == "kg"
+
+
+async def test_calculate_reorder_quantity_tool_unknown_item_raises(db_session):
+    service, _ = await _build(db_session)
+    restaurant = await make_restaurant(db_session)
+    context = ToolContext(restaurant_id=restaurant.id, correlation_id="c1", acting_agent="inventory")
+
+    with pytest.raises(ToolError) as exc_info:
+        import uuid as uuid_mod
+
+        await CalculateReorderQuantityTool(service)({"item_id": str(uuid_mod.uuid4())}, context=context)
+    assert exc_info.value.code == "item_not_found"

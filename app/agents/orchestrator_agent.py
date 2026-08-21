@@ -228,6 +228,7 @@ class OrchestratorAgent:
             model_name=self.llm.model_name,
             model_provider=get_settings().llm_provider,
             restaurant_id=str(restaurant_id),
+            agent_run_id=str(run.id),
             correlation_id=str(run.correlation_id),
             trigger_type=trigger_type,
         ) as span:
@@ -272,6 +273,7 @@ class OrchestratorAgent:
             model_name=self.llm.model_name,
             model_provider=get_settings().llm_provider,
             restaurant_id=snapshot_values.get("restaurant_id"),
+            agent_run_id=str(orchestrator_run_id),
             correlation_id=snapshot_values.get("correlation_id"),
             resumed=True,
         ) as span:

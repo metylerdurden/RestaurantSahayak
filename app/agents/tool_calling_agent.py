@@ -95,6 +95,7 @@ class ToolCallingAgent:
             model_name=self.llm.model_name,
             model_provider=get_settings().llm_provider,
             restaurant_id=str(restaurant_id),
+            agent_run_id=str(run.id),
             correlation_id=str(run.correlation_id),
             trigger_type=trigger_type,
         ) as span:

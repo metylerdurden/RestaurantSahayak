@@ -109,3 +109,39 @@ class AnalyzeInventoryOutput(BaseModel):
     critical_count: int
     warning_count: int
     action_required: bool
+
+
+# --- calculate_reorder_quantity ---
+
+
+class CalculateReorderQuantityInput(BaseModel):
+    item_id: uuid.UUID
+
+
+class CalculateReorderQuantityOutput(BaseModel):
+    """Deterministic, non-projected reorder sizing for one item — target_quantity
+    minus current_quantity, floored at zero. See
+    InventoryService.calculate_reorder_quantity / ._target_quantity for the rule."""
+
+    item_id: uuid.UUID
+    item_name: str
+    current_quantity: Decimal
+    threshold: Decimal
+    target_quantity: Decimal
+    recommended_order_quantity: Decimal
+    unit: str
+
+
+# --- structured run summary (Inventory Agent only; derived from AgentResult.tool_calls) ---
+
+
+class InventoryRunSummary(BaseModel):
+    """Distinguishes what the Inventory Agent observed from what it recommended,
+    what it actually did (auto-approved actions), and what still needs a manager's
+    decision — derived entirely from the run's own recorded tool calls, never from
+    the model's prose. See app.agents.inventory_agent.summarize_inventory_run."""
+
+    observations: list[dict] = Field(default_factory=list)
+    recommendations: list[dict] = Field(default_factory=list)
+    actions_taken: list[dict] = Field(default_factory=list)
+    pending_approvals: list[dict] = Field(default_factory=list)

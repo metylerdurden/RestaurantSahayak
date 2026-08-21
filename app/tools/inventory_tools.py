@@ -5,6 +5,8 @@ from __future__ import annotations
 from app.schemas.inventory import (
     AnalyzeInventoryInput,
     AnalyzeInventoryOutput,
+    CalculateReorderQuantityInput,
+    CalculateReorderQuantityOutput,
     CalculateRequiredInventoryInput,
     CalculateRequiredInventoryOutput,
     CheckStockInput,
@@ -120,6 +122,38 @@ class AnalyzeInventoryTool(Tool[AnalyzeInventoryInput, AnalyzeInventoryOutput]):
             critical_count=critical_count,
             warning_count=warning_count,
             action_required=action_required,
+        )
+
+
+class CalculateReorderQuantityTool(Tool[CalculateReorderQuantityInput, CalculateReorderQuantityOutput]):
+    name = "calculate_reorder_quantity"
+    description = (
+        "Deterministically compute how much of one specific item to reorder to reach "
+        "its restocking target, from real current-quantity and threshold data only — "
+        "no usage history required. Use this for a single-item reorder decision; "
+        "analyze_inventory already includes an equivalent recommendation for every "
+        "flagged item in one call."
+    )
+    input_model = CalculateReorderQuantityInput
+    output_model = CalculateReorderQuantityOutput
+
+    def __init__(self, service: InventoryService) -> None:
+        self.service = service
+
+    async def run(
+        self, input: CalculateReorderQuantityInput, *, context: ToolContext
+    ) -> CalculateReorderQuantityOutput:
+        item, target_quantity, recommended = await self.service.calculate_reorder_quantity(
+            restaurant_id=context.restaurant_id, item_id=input.item_id
+        )
+        return CalculateReorderQuantityOutput(
+            item_id=item.id,
+            item_name=item.name,
+            current_quantity=item.quantity_on_hand,
+            threshold=item.low_stock_threshold,
+            target_quantity=target_quantity,
+            recommended_order_quantity=recommended,
+            unit=item.unit,
         )
 
 

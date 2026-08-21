@@ -95,6 +95,7 @@ class Tool(ABC, Generic[InputT, OutputT]):
             tool_name=self.name,
             agent_name=context.acting_agent,
             restaurant_id=str(context.restaurant_id),
+            agent_run_id=str(context.agent_run_id) if context.agent_run_id else None,
             correlation_id=context.correlation_id,
         ) as span:
             try:

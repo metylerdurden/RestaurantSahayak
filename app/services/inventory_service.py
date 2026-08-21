@@ -177,6 +177,15 @@ class InventoryService:
             )
         return item, sufficient, shortfall
 
+    def _target_quantity(self, item: InventoryItem) -> Decimal:
+        """The restaurant's restocking target for an item: 2x its configured
+        low-stock threshold — an explicit, auditable number, not a guess. No
+        separate 'target_stock'/'par_level' field exists on InventoryItem (see the
+        data model), so this is the one place that rule is defined; both
+        calculate_required_inventory (usage-projected) and calculate_reorder_quantity
+        (direct top-up) build on it rather than each picking their own number."""
+        return item.low_stock_threshold * 2
+
     async def calculate_required_inventory(
         self, *, restaurant_id: uuid.UUID, item_id: uuid.UUID, days_ahead: int
     ) -> tuple[InventoryItem, Decimal, Decimal, Decimal, int]:
@@ -189,10 +198,11 @@ class InventoryService:
         average_daily_usage = (Decimal(total_consumed) / Decimal(lookback_days)) if lookback_days > 0 else Decimal(0)
         projected_quantity_at_horizon = item.quantity_on_hand - average_daily_usage * days_ahead
 
-        # Recommend enough to bring the projected quantity back up to a 2x-threshold
-        # buffer — an explicit, auditable target, not just "top up to the threshold."
-        target_buffer = item.low_stock_threshold * 2
-        recommended_order_quantity = max(Decimal(0), target_buffer - projected_quantity_at_horizon)
+        # Recommend enough to bring the projected quantity back up to the target —
+        # accounts for expected usage between now and the horizon, not just today's
+        # snapshot (see calculate_reorder_quantity for the simpler, non-projected form).
+        target_quantity = self._target_quantity(item)
+        recommended_order_quantity = max(Decimal(0), target_quantity - projected_quantity_at_horizon)
 
         return (
             item,
@@ -201,6 +211,20 @@ class InventoryService:
             recommended_order_quantity,
             lookback_days,
         )
+
+    async def calculate_reorder_quantity(
+        self, *, restaurant_id: uuid.UUID, item_id: uuid.UUID
+    ) -> tuple[InventoryItem, Decimal, Decimal]:
+        """Deterministic, non-projected reorder sizing: target_quantity (2x the
+        configured threshold) minus what's on hand right now, floored at zero.
+        Unlike calculate_required_inventory, this never needs transaction history —
+        it answers "how much to reach our target today," the simpler question a
+        one-off reorder decision usually needs. The LLM never computes this itself;
+        it only reads the result."""
+        item = await self._get_item_or_raise(restaurant_id, item_id)
+        target_quantity = self._target_quantity(item)
+        recommended_order_quantity = max(Decimal(0), target_quantity - item.quantity_on_hand)
+        return item, target_quantity, recommended_order_quantity
 
     async def create_purchase_request(
         self,
@@ -211,7 +235,7 @@ class InventoryService:
         estimated_cost: Decimal | None,
         context: ToolContext,
     ) -> PurchaseRequest | PendingApprovalOutput:
-        await self._get_item_or_raise(restaurant_id, item_id)
+        item = await self._get_item_or_raise(restaurant_id, item_id)
 
         # Idempotency: a second proposal for the same still-open shortage (e.g. the
         # inventory-check workflow running twice before anything has actually
@@ -254,8 +278,18 @@ class InventoryService:
                 parameters={
                     "action": "approve_purchase_request",
                     "purchase_request_id": str(purchase_request.id),
+                    "item_id": str(item.id),
+                    "item_name": item.name,
+                    "unit": item.unit,
+                    "current_quantity": str(item.quantity_on_hand),
+                    "low_stock_threshold": str(item.low_stock_threshold),
+                    "recommended_quantity": str(requested_quantity),
                 },
-                reason=f"Purchase {requested_quantity} units, estimated cost {estimated_cost}",
+                reason=(
+                    f"Restock {item.name}: {requested_quantity} {item.unit} requested "
+                    f"(currently {item.quantity_on_hand} {item.unit} on hand, threshold "
+                    f"{item.low_stock_threshold} {item.unit}), estimated cost {estimated_cost}"
+                ),
                 risk_level="HIGH",
             )
             purchase_request.approval_id = approval.id

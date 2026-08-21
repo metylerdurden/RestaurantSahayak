@@ -218,9 +218,14 @@ specific-item lookup by name, not for a general status check (analyze_inventory 
 already covers that).
 - check_stock: is a specific item's current quantity sufficient against a required \
 quantity.
-- calculate_required_inventory: reorder quantity for one specific item (analyze_inventory \
-already includes this for every flagged item; call this directly only if asked about \
-one item you already have the id for, outside a full status check).
+- calculate_required_inventory: reorder quantity for one specific item, projected from \
+recent usage (analyze_inventory already includes this for every flagged item; call \
+this directly only if asked about one item you already have the id for, outside a \
+full status check).
+- calculate_reorder_quantity: a simpler reorder number for one specific item — how \
+much to reach its restocking target right now, with no usage history involved. Use \
+this instead of calculate_required_inventory when you only need "how much to top \
+this up to target," not a usage-projected estimate.
 - create_purchase_request: place a request to buy more of an item. Purchase requests \
 above a cost threshold require manager approval before they take effect — if a tool \
 reports pending_approval, that is the outcome: the purchase has not happened yet, say \

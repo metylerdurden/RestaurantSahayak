@@ -13,8 +13,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agents.inventory_agent import InventoryAgent
+from app.agents.inventory_agent import InventoryAgent, summarize_inventory_run
 from app.agents.prompts import INVENTORY_AGENT_SYSTEM_PROMPT
+from app.agents.state import AgentResult, ToolCallRecord
 from app.llm.base import LLMMessage, LLMProvider, LLMResponse, ToolCall
 from app.repositories.agent_run_repo import AgentRunRepository
 from app.services.agent_run_service import AgentRunService
@@ -22,6 +23,7 @@ from app.services.inventory_service import InventoryService
 from app.tools.base import PendingApprovalOutput
 from app.tools.inventory_tools import (
     AnalyzeInventoryTool,
+    CalculateReorderQuantityTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -91,6 +93,7 @@ def tools(inventory_service):
         GetInventoryTool(inventory_service),
         CheckStockTool(inventory_service),
         CalculateRequiredInventoryTool(inventory_service),
+        CalculateReorderQuantityTool(inventory_service),
         CreatePurchaseRequestTool(inventory_service),
     ]
 
@@ -104,6 +107,7 @@ def test_inventory_agent_is_named_and_prompted_correctly(agent_run_service, tool
         "get_inventory",
         "check_stock",
         "calculate_required_inventory",
+        "calculate_reorder_quantity",
         "create_purchase_request",
     }
 
@@ -282,3 +286,133 @@ async def test_inventory_tool_failure_is_a_controlled_failure_not_a_hallucinatio
     assert result.tool_calls == []
     assert result.data is None
     assert "couldn't" in result.summary.lower() or "error" in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_calculate_reorder_quantity_failure_is_a_controlled_failure(agent_run_service, tools, inventory_service):
+    """TASK 7: reorder calculation failure -> controlled agent failure, no invented number."""
+    from app.tools.base import ToolError
+
+    inventory_service.calculate_reorder_quantity.side_effect = ToolError("item_not_found", "No such item")
+
+    responses = [
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="calculate_reorder_quantity", arguments={"item_id": str(uuid.uuid4())})],
+        ),
+        LLMResponse(content="I couldn't find that item to calculate a reorder quantity.", model="fake-model"),
+    ]
+    agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
+
+    result = await agent.handle("How much Truffle Oil should we reorder?", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "completed"
+    assert result.tool_calls == []  # the failed call is never recorded as a success
+    assert result.data is None
+    assert "couldn't" in result.summary.lower() or "find" in result.summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_arguments_are_handled_safely(agent_run_service, tools, inventory_service):
+    """TASK 7: a malformed tool call (missing the required item_id) must not crash
+    the run — it's reported back to the model as a typed error, same as any other
+    tool failure, and the agent still produces a final answer."""
+    responses = [
+        LLMResponse(
+            content="",
+            model="fake-model",
+            tool_calls=[ToolCall(id="c0", name="calculate_reorder_quantity", arguments={})],  # missing item_id
+        ),
+        LLMResponse(content="I need a specific item to calculate a reorder quantity for.", model="fake-model"),
+    ]
+    agent = InventoryAgent(llm=ScriptedLLM(responses), tools=tools, agent_run_service=agent_run_service)
+
+    result = await agent.handle("Calculate the reorder quantity.", restaurant_id=RESTAURANT_ID)
+
+    assert result.status == "completed"
+    assert result.tool_calls == []
+    assert result.data is None
+    inventory_service.calculate_reorder_quantity.assert_not_called()  # never reached the service with bad input
+
+
+# --- summarize_inventory_run (TASK 6) ---
+
+
+def _tool_call(name: str, output: dict) -> ToolCallRecord:
+    return ToolCallRecord(tool_name=name, input={}, output=output)
+
+
+def _result(*calls: ToolCallRecord) -> AgentResult:
+    return AgentResult(
+        agent_run_id=uuid.uuid4(), status="completed", summary="done", tool_calls=list(calls), latency_ms=1
+    )
+
+
+def test_summarize_distinguishes_observations_recommendations_actions_and_pending_approvals():
+    basil = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "Fresh Basil",
+        "unit": "kg",
+        "quantity_on_hand": "0.000",
+        "low_stock_threshold": "1.000",
+    }
+    analyze_output = {
+        "alerts": [
+            {
+                "item": basil,
+                "status": "out_of_stock",
+                "severity": "critical",
+                "action_required": True,
+                "recommended_reorder_quantity": "2.000",
+                "reorder_quantity_available": True,
+                "reason": None,
+            }
+        ],
+        "critical_count": 1,
+        "warning_count": 0,
+        "action_required": True,
+    }
+    purchase_output_pending = {"status": "pending_approval", "approval_id": "app-1", "summary": "Needs approval"}
+    purchase_output_executed = {
+        "purchase_request": {"id": "pr-1", "item_id": basil["id"], "requested_quantity": "2.000", "status": "approved"}
+    }
+
+    result = _result(
+        _tool_call("analyze_inventory", analyze_output),
+        _tool_call("create_purchase_request", purchase_output_pending),
+        _tool_call("create_purchase_request", purchase_output_executed),
+    )
+
+    summary = summarize_inventory_run(result)
+
+    assert len(summary.observations) == 1
+    assert summary.observations[0]["item_name"] == "Fresh Basil"
+    assert summary.observations[0]["status"] == "out_of_stock"
+    assert len(summary.recommendations) == 1
+    assert summary.recommendations[0]["recommended_order_quantity"] == "2.000"
+    assert len(summary.pending_approvals) == 1
+    assert summary.pending_approvals[0]["approval_id"] == "app-1"
+    assert len(summary.actions_taken) == 1
+    assert summary.actions_taken[0]["purchase_request_id"] == "pr-1"
+
+
+def test_summarize_with_no_tool_calls_is_all_empty():
+    summary = summarize_inventory_run(_result())
+    assert summary.observations == []
+    assert summary.recommendations == []
+    assert summary.actions_taken == []
+    assert summary.pending_approvals == []
+
+
+def test_summarize_tolerates_a_malformed_tool_output_without_crashing():
+    """TASK 7: a tool_result missing expected keys (e.g. a corrupted trace row) must
+    not raise — summarize_inventory_run degrades gracefully instead of crashing
+    whatever's reading the run afterward."""
+    malformed = _tool_call("analyze_inventory", {"alerts": [{"item": {}}]})  # no status/severity/etc.
+
+    summary = summarize_inventory_run(_result(malformed))
+
+    assert len(summary.observations) == 1
+    assert summary.observations[0]["item_name"] is None  # missing, not fabricated
+    assert summary.recommendations == []  # action_required missing -> not treated as actionable

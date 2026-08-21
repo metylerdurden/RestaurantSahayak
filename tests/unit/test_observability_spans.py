@@ -110,6 +110,7 @@ async def test_agent_run_and_tool_call_spans_are_created_and_nested(agent_run_se
     assert agent_span.attributes["model_name"] == "fake-model"
     assert agent_span.attributes["restaurant_id"] == str(RESTAURANT_ID)
     assert uuid.UUID(agent_span.attributes["correlation_id"])  # a real id, distinct from agent_run_id
+    assert uuid.UUID(agent_span.attributes["agent_run_id"])  # this run's own id, not just its correlation_id
     assert agent_span.attributes["success"] is True
     assert agent_span.attributes["status"] == "completed"
     assert "latency_ms" in agent_span.attributes
@@ -118,6 +119,10 @@ async def test_agent_run_and_tool_call_spans_are_created_and_nested(agent_run_se
     assert tool_span.attributes["tool_name"] == "get_customer"
     assert tool_span.attributes["agent_name"] == "customer"
     assert tool_span.attributes["success"] is True
+    # The tool call's agent_run_id matches the agent run it belongs to — lets a
+    # trace backend filter every span for one specific run, not just everything
+    # sharing its (broader) correlation_id.
+    assert tool_span.attributes["agent_run_id"] == agent_span.attributes["agent_run_id"]
     # tool.call happened inside the agent run it belongs to.
     assert tool_span.parent.span_id == agent_span.context.span_id
 

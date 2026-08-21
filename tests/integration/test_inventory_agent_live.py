@@ -22,6 +22,7 @@ from app.services.approval_service import ApprovalService
 from app.services.inventory_service import InventoryService
 from app.tools.inventory_tools import (
     AnalyzeInventoryTool,
+    CalculateReorderQuantityTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -49,6 +50,7 @@ def _build_agent(db_session, llm, *, max_iterations: int = 8) -> InventoryAgent:
         GetInventoryTool(service),
         CheckStockTool(service),
         CalculateRequiredInventoryTool(service),
+        CalculateReorderQuantityTool(service),
         CreatePurchaseRequestTool(service),
     ]
     return InventoryAgent(llm=llm, tools=tools, agent_run_service=agent_run_service, max_iterations=max_iterations)

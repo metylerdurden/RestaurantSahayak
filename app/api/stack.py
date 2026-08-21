@@ -49,6 +49,7 @@ from app.tools.analytics_tools import GetDailySalesTool, GetItemSalesTool, GetNo
 from app.tools.customer_tools import GetCustomerHistoryTool, GetCustomerTool, UpdateCustomerTool
 from app.tools.inventory_tools import (
     AnalyzeInventoryTool,
+    CalculateReorderQuantityTool,
     CalculateRequiredInventoryTool,
     CheckStockTool,
     CreatePurchaseRequestTool,
@@ -178,6 +179,7 @@ def build_agent_stack(session: AsyncSession) -> AgentStack:
             GetInventoryTool(inventory_service),
             CheckStockTool(inventory_service),
             CalculateRequiredInventoryTool(inventory_service),
+            CalculateReorderQuantityTool(inventory_service),
             CreatePurchaseRequestTool(inventory_service),
         ],
         agent_run_service=agent_run_service,
